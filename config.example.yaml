@@ -1,0 +1,36 @@
+# Hive-Mind Configuration
+redis:
+  # Cluster mode (6 nodes: 3 masters + 3 replicas)
+  cluster_mode: true
+  nodes:
+    - host: "127.0.0.1"  # localhost or IP of cluster host
+      port: 7000
+    - host: "127.0.0.1"
+      port: 7001
+    - host: "127.0.0.1"
+      port: 7002
+  password: "YOUR_SECURE_PASSWORD_HERE"  # Generate with: openssl rand -base64 32
+  socket_timeout: 5
+  socket_connect_timeout: 5
+  # Cluster will auto-discover replicas (7003, 7004, 7005)
+
+mcp:
+  server_name: "hive-mind"
+  version: "0.1.0"
+
+embedding:
+  enabled: false  # Enable when inference node is ready
+  endpoint: "http://inference-node:8081/embed"
+  model: "all-MiniLM-L6-v2"
+  cache_embeddings: true
+
+cache:
+  tool_ttl: 3600        # 1 hour
+  session_ttl: 604800   # 7 days
+  embedding_ttl: 2592000  # 30 days
+
+learning:
+  enabled: false  # Enable in Phase 4
+  queue_name: "learning:queue"
+  batch_size: 100
+  max_queue_length: 100000
