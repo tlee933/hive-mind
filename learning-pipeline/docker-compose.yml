@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  learning-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hive-mind-learning
+    hostname: learning-pipeline
+
+    # ROCm GPU access
+    devices:
+      - /dev/kfd
+      - /dev/dri
+
+    group_add:
+      - video
+
+    ipc: host
+
+    cap_add:
+      - SYS_PTRACE
+
+    security_opt:
+      - seccomp=unconfined
+
+    # Environment
+    environment:
+      - HSA_OVERRIDE_GFX_VERSION=12.0.1
+      - ROCR_VISIBLE_DEVICES=0
+      - PYTORCH_ROCM_ARCH=gfx1201
+      - CONFIG_PATH=/workspace/config.yaml
+      - WANDB_MODE=offline  # Set to 'online' if using W&B
+
+    # Volumes
+    volumes:
+      - ../config.yaml:/workspace/config.yaml:ro
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+      - ./scripts:/workspace/scripts
+      - ./configs:/workspace/configs
+      - /mnt/nas-moar/models:/models:ro  # Read-only access to model storage
+
+    # Network
+    network_mode: host
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Resource limits (optional)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: amdgpu
+              capabilities: [gpu]

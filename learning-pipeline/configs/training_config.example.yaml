@@ -1,0 +1,183 @@
+# Hive-Mind Learning Pipeline Configuration
+# Copy to training_config.yaml and customize for your setup
+
+# Base model configuration
+model:
+  # Model name from HuggingFace or local path
+  name: "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+  # Model loading
+  torch_dtype: "bfloat16"  # Use bfloat16 for ROCm, float16 for CUDA
+  device_map: "auto"       # Automatic device placement
+  trust_remote_code: true
+
+# LoRA configuration
+lora:
+  # LoRA rank - controls adapter capacity
+  # Higher = more parameters, better fit, slower training
+  # Typical values: 8 (fast), 16 (balanced), 32 (high capacity)
+  r: 16
+
+  # LoRA alpha - scaling factor
+  # Typically 2x the rank
+  alpha: 32
+
+  # Dropout for regularization
+  dropout: 0.05
+
+  # Target modules - which layers to apply LoRA
+  # Common for Qwen/Llama: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+  # Bias handling
+  bias: "none"
+
+# Training configuration
+training:
+  # Number of training epochs
+  num_epochs: 3
+
+  # Batch sizes
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  # Effective batch size = per_device_batch * gradient_accum * num_gpus
+
+  # Learning rate
+  learning_rate: 2.0e-4
+
+  # Learning rate scheduler
+  lr_scheduler_type: "cosine"
+  warmup_steps: 50
+
+  # Optimizer
+  optimizer: "adamw_torch"
+  weight_decay: 0.01
+
+  # Mixed precision
+  fp16: false       # Don't use fp16 on ROCm
+  bf16: true        # Use bf16 for better stability on ROCm
+
+  # Gradient clipping
+  max_grad_norm: 1.0
+
+  # Logging
+  logging_steps: 10
+  logging_strategy: "steps"
+
+  # Checkpointing
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3  # Keep only last 3 checkpoints
+
+  # Evaluation
+  evaluation_strategy: "no"  # No eval set by default
+
+  # Other
+  seed: 42
+  report_to: "tensorboard"  # Options: tensorboard, wandb, none
+
+# Data configuration
+data:
+  # Maximum sequence length
+  max_length: 512
+
+  # Padding strategy
+  padding: "max_length"
+
+  # Truncation
+  truncation: true
+
+  # Instruction format
+  # Alpaca format by default
+  instruction_template: |
+    ### Instruction:
+    {instruction}
+
+    ### Input:
+    {input}
+
+    ### Response:
+    {output}
+
+# Data collection
+collection:
+  # Redis queue to read from
+  queue_name: "learning:queue"
+
+  # Maximum interactions to collect per run
+  max_items: 1000
+
+  # Minimum success rate to include in training
+  min_success_rate: 0.8
+
+  # Filtering
+  filter_failed: true         # Skip failed interactions
+  filter_duplicates: true     # Remove duplicate interactions
+  deduplicate_by: "input"     # Deduplicate by input field
+
+# Evaluation
+evaluation:
+  # Enable evaluation
+  enabled: false
+
+  # Validation split percentage
+  val_split: 0.1
+
+  # Metrics to compute
+  metrics:
+    - "perplexity"
+    - "loss"
+
+# Export
+export:
+  # Formats to export
+  formats:
+    - "hf"           # HuggingFace format
+    - "safetensors"  # SafeTensors format
+
+  # Merge and quantize
+  merge_adapter: true
+  quantize: false    # Set to true for GGUF conversion
+
+# Hardware optimization
+hardware:
+  # GPU memory optimization
+  gradient_checkpointing: false  # Enable if OOM
+
+  # DataLoader workers
+  dataloader_num_workers: 4
+
+  # Pin memory for faster data transfer
+  dataloader_pin_memory: true
+
+# Monitoring
+monitoring:
+  # TensorBoard
+  tensorboard:
+    enabled: true
+    log_dir: "/workspace/models/logs"
+
+  # Weights & Biases
+  wandb:
+    enabled: false
+    project: "hive-mind"
+    entity: null  # Your W&B username/team
+
+# Advanced
+advanced:
+  # Resume from checkpoint
+  resume_from_checkpoint: null  # Path to checkpoint or "latest"
+
+  # Custom training loop
+  use_custom_trainer: false
+
+  # Distributed training
+  distributed: false
+  num_processes: 1

@@ -61,3 +61,9 @@ models/
 # Backup files
 *.bak
 *~
+
+# Learning Pipeline
+learning-pipeline/data/*
+!learning-pipeline/data/.gitkeep
+learning-pipeline/models/*
+!learning-pipeline/models/.gitkeep
