@@ -1,0 +1,84 @@
+# Hive-Mind Native Training Configuration
+# Optimized for TheRock ROCm 7.12 + gfx1201
+
+# Data
+data:
+  train_file: "/var/mnt/build/MCP/hive-mind/learning-pipeline/data/training_data_synthetic.jsonl"
+  max_samples: 1500
+  validation_split: 0.1
+  max_seq_length: 2048
+
+# Model
+model:
+  base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"  # or use local: /mnt/nas-moar/models/Qwen2.5-Coder-7B
+  model_type: "causal_lm"
+  torch_dtype: "bfloat16"  # gfx1201 supports bf16 at 125 TFLOPS
+  device_map: "auto"
+
+# LoRA Configuration
+lora:
+  r: 32  # Rank - higher = more capacity
+  lora_alpha: 64  # Scaling factor (usually 2*r)
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Training Arguments
+training:
+  output_dir: "/var/mnt/build/MCP/hive-mind/learning-pipeline/models/lora_gfx1201"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4  # Effective batch size = 16
+  gradient_checkpointing: true
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+  logging_steps: 10
+  eval_steps: 50
+  save_steps: 100
+  save_total_limit: 3
+  fp16: false
+  bf16: true  # Use BF16 for gfx1201
+  optim: "adamw_torch"
+  max_grad_norm: 1.0
+  seed: 42
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+  report_to: ["tensorboard"]
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+# Hardware Optimization
+hardware:
+  rocm_home: "/mnt/build/TheRock/build/artifacts/base_run_generic/opt/rocm"
+  hsa_override_gfx_version: "12.0.1"
+  pytorch_rocm_arch: "gfx1201"
+  hip_visible_devices: "0"
+
+# Logging
+logging:
+  tensorboard_dir: "/var/mnt/build/MCP/hive-mind/learning-pipeline/models/runs"
+  log_level: "info"
+
+# Export
+export:
+  merged_model_dir: "/var/mnt/build/MCP/hive-mind/learning-pipeline/models/merged_gfx1201"
+  push_to_hub: false
+
+# Redis (for logging training metrics)
+redis:
+  host: "localhost"
+  port: 7000
+  password: "${REDIS_PASSWORD}"  # Will read from config.yaml
+  log_metrics: true

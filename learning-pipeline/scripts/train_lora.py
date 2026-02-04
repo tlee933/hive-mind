@@ -24,7 +24,6 @@ from datasets import load_dataset
 from peft import (
     LoraConfig,
     get_peft_model,
-    prepare_model_for_kbit_training,
     TaskType
 )
 
@@ -84,6 +83,7 @@ class LoRATrainer:
             optim="adamw_torch",
             report_to="tensorboard",
             logging_dir=str(self.output_dir / "logs"),
+            remove_unused_columns=False,  # Keep 'text' column for on-the-fly tokenization
         )
 
         logger.info(f"Initialized trainer for model: {model_name}")
@@ -111,8 +111,9 @@ class LoRATrainer:
             trust_remote_code=True
         )
 
-        # Prepare for LoRA
-        self.model = prepare_model_for_kbit_training(self.model)
+        # Prepare for LoRA (skip kbit prep since we're using BF16, not quantized)
+        # Enable gradient checkpointing for memory efficiency
+        self.model.gradient_checkpointing_enable()
         self.model = get_peft_model(self.model, self.lora_config)
 
         # Print trainable parameters
@@ -131,47 +132,41 @@ class LoRATrainer:
 
         # Format examples
         def format_instruction(example):
-            """Format example as instruction-following"""
-            instruction = example['instruction']
-            input_text = example.get('input', '')
-            output = example['output']
+            """Format example as instruction-following for system interactions"""
+            user_request = example['user_request']
+            command = example.get('command', '')
+            output = example.get('output', '')
+            tool = example.get('tool', 'bash')
 
-            if input_text:
-                prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n"
-            else:
-                prompt = f"### Instruction:\n{instruction}\n\n### Response:\n"
-
+            # Format as a system interaction
+            prompt = f"### User Request:\n{user_request}\n\n### Tool: {tool}\n### Command:\n{command}\n\n### Output:\n"
             full_text = prompt + output
 
             return {'text': full_text}
 
-        dataset = dataset.map(format_instruction)
+        # Just format text, don't tokenize yet (will tokenize on-the-fly)
+        self.train_dataset = dataset.map(format_instruction, remove_columns=dataset.column_names)
 
-        # Tokenize
-        def tokenize(examples):
-            return self.tokenizer(
-                examples['text'],
-                truncation=True,
-                max_length=512,
-                padding='max_length',
-            )
-
-        self.train_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names
-        )
-
-        logger.info(f"Dataset prepared: {len(self.train_dataset)} tokenized examples")
+        logger.info(f"Dataset prepared: {len(self.train_dataset)} formatted examples (tokenization on-the-fly)")
 
     def train(self):
         """Run training"""
         logger.info("Starting training...")
 
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=False
-        )
+        # Custom collator that tokenizes on-the-fly
+        def collate_fn(examples):
+            texts = [ex['text'] for ex in examples]
+            tokenized = self.tokenizer(
+                texts,
+                truncation=True,
+                max_length=256,
+                padding=True,
+                return_tensors='pt'
+            )
+            tokenized['labels'] = tokenized['input_ids'].clone()
+            return tokenized
+
+        data_collator = collate_fn
 
         trainer = Trainer(
             model=self.model,

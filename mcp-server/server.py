@@ -19,12 +19,15 @@ import redis.asyncio as aioredis
 from redis.asyncio.cluster import RedisCluster, ClusterNode
 import yaml
 
-# MCP SDK imports (placeholder - adjust based on actual MCP SDK)
-# from mcp import MCPServer, Tool, Response
+# MCP SDK imports
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stderr  # Important: log to stderr so stdout is clean for MCP protocol
 )
 logger = logging.getLogger("hive-mind-mcp")
 
@@ -284,56 +287,199 @@ class HiveMindMCP:
 
 
 async def main():
-    """Main entry point"""
-    import argparse
+    """Main entry point for MCP server"""
+    # Get config path from environment or use default
+    config_path = os.environ.get('CONFIG_PATH', 'config.yaml')
 
-    parser = argparse.ArgumentParser(description='Hive-Mind MCP Server')
-    parser.add_argument('--config', default='config.yaml', help='Config file path')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-    args = parser.parse_args()
+    logger.info(f"Starting Hive-Mind MCP Server with config: {config_path}")
 
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # Initialize Hive-Mind backend
+    hive_mind = HiveMindMCP(config_path)
+    await hive_mind.connect()
 
-    # Initialize server
-    server = HiveMindMCP(args.config)
+    # Create MCP server
+    server = Server("hive-mind")
 
-    try:
-        await server.connect()
+    # Register tools
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        """List available Hive-Mind tools"""
+        return [
+            Tool(
+                name="memory_store",
+                description="Store current context in distributed memory. Survives terminal restarts and shared across machines.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "context": {
+                            "type": "string",
+                            "description": "Description of what you're working on"
+                        },
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of relevant file paths"
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Current task description"
+                        }
+                    },
+                    "required": ["context"]
+                }
+            ),
+            Tool(
+                name="memory_recall",
+                description="Recall context from distributed memory. Retrieve context from current or previous sessions.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID to recall (optional, defaults to current session)"
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="memory_list_sessions",
+                description="List recent sessions in distributed memory",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "number",
+                            "description": "Maximum number of sessions to return (default: 10)",
+                            "default": 10
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="tool_cache_get",
+                description="Get cached tool output from previous executions",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "description": "Name of the tool (e.g., 'bash', 'read')"
+                        },
+                        "input_hash": {
+                            "type": "string",
+                            "description": "Hash of tool inputs"
+                        }
+                    },
+                    "required": ["tool_name", "input_hash"]
+                }
+            ),
+            Tool(
+                name="tool_cache_set",
+                description="Cache tool output for future use",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "description": "Name of the tool"
+                        },
+                        "input_hash": {
+                            "type": "string",
+                            "description": "Hash of tool inputs"
+                        },
+                        "output": {
+                            "type": "string",
+                            "description": "Tool output to cache"
+                        },
+                        "ttl": {
+                            "type": "number",
+                            "description": "Time to live in seconds (optional)"
+                        }
+                    },
+                    "required": ["tool_name", "input_hash", "output"]
+                }
+            ),
+            Tool(
+                name="learning_queue_add",
+                description="Add interaction to learning queue for future model training",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "interaction": {
+                            "type": "object",
+                            "description": "Interaction data containing user_query, tool_used, result, success, etc."
+                        }
+                    },
+                    "required": ["interaction"]
+                }
+            ),
+            Tool(
+                name="get_stats",
+                description="Get Hive-Mind system statistics (Redis info, session counts, queue lengths, etc.)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {}
+                }
+            )
+        ]
 
-        # Test basic operations
-        logger.info("Testing basic operations...")
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        """Handle tool calls"""
+        try:
+            if name == "memory_store":
+                result = await hive_mind.memory_store(
+                    context=arguments["context"],
+                    files=arguments.get("files"),
+                    task=arguments.get("task")
+                )
+            elif name == "memory_recall":
+                result = await hive_mind.memory_recall(
+                    session_id=arguments.get("session_id")
+                )
+            elif name == "memory_list_sessions":
+                result = await hive_mind.memory_list_sessions(
+                    limit=arguments.get("limit", 10)
+                )
+            elif name == "tool_cache_get":
+                cached = await hive_mind.tool_cache_get(
+                    tool_name=arguments["tool_name"],
+                    input_hash=arguments["input_hash"]
+                )
+                result = {"cached_output": cached} if cached else {"cached_output": None}
+            elif name == "tool_cache_set":
+                await hive_mind.tool_cache_set(
+                    tool_name=arguments["tool_name"],
+                    input_hash=arguments["input_hash"],
+                    output=arguments["output"],
+                    ttl=arguments.get("ttl")
+                )
+                result = {"success": True}
+            elif name == "learning_queue_add":
+                await hive_mind.learning_queue_add(
+                    interaction=arguments["interaction"]
+                )
+                result = {"success": True}
+            elif name == "get_stats":
+                result = await hive_mind.get_stats()
+            else:
+                result = {"error": f"Unknown tool: {name}"}
 
-        # Store context
-        result = await server.memory_store(
-            context="Testing Hive-Mind distributed memory system",
-            files=["/mnt/build/MCP/hive-mind/README.md"],
-            task="Phase 1: Redis setup and MCP server implementation"
-        )
-        logger.info(f"Store result: {result}")
+            return [TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+        except Exception as e:
+            logger.error(f"Error calling tool {name}: {e}", exc_info=True)
+            return [TextContent(
+                type="text",
+                text=json.dumps({"error": str(e)})
+            )]
 
-        # Recall context
-        result = await server.memory_recall()
-        logger.info(f"Recall result: {result}")
-
-        # Get stats
-        stats = await server.get_stats()
-        logger.info(f"Stats: {json.dumps(stats, indent=2)}")
-
-        logger.info("✅ All tests passed! MCP server ready.")
-
-        # Keep running (in production, this would be MCP protocol loop)
-        if args.debug:
-            logger.info("Running in debug mode. Press Ctrl+C to exit.")
-            await asyncio.Event().wait()
-
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        sys.exit(1)
-    finally:
-        await server.disconnect()
+    # Run the server
+    logger.info("Hive-Mind MCP Server ready!")
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 if __name__ == '__main__':

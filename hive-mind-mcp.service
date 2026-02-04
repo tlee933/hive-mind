@@ -1,0 +1,29 @@
+[Unit]
+Description=Hive-Mind MCP Server
+After=docker.service
+Requires=docker.service
+Documentation=https://github.com/tlee933/hive-mind
+
+[Service]
+Type=simple
+User=hashcat
+Group=hashcat
+WorkingDirectory=/mnt/build/MCP/hive-mind
+Environment="CONFIG_PATH=/mnt/build/MCP/hive-mind/config.yaml"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/mnt/build/MCP/hive-mind/.venv/bin/python /mnt/build/MCP/hive-mind/mcp-server/server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hive-mind-mcp
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/mnt/build/MCP/hive-mind
+
+[Install]
+WantedBy=multi-user.target

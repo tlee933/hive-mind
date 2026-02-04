@@ -4,8 +4,13 @@
 redis[hiredis]>=5.0.0
 pyyaml>=6.0
 
-# MCP SDK (placeholder - update with actual SDK)
-# mcp-sdk>=0.1.0
+# MCP SDK
+mcp>=1.26.0
+
+# HTTP API Server
+fastapi>=0.128.0
+uvicorn>=0.40.0
+requests>=2.31.0
 
 # Embeddings (Phase 2)
 sentence-transformers>=2.2.0
