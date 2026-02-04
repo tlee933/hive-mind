@@ -249,9 +249,21 @@ class HiveMindMCP:
         interaction['timestamp'] = datetime.now().isoformat()
         interaction['session_id'] = self.session_id
 
+        # Convert all values to strings (Redis streams require string/int/float)
+        # Booleans need explicit conversion to string
+        redis_interaction = {}
+        for k, v in interaction.items():
+            if isinstance(v, bool):
+                redis_interaction[k] = str(v)
+            elif isinstance(v, (str, int, float)):
+                redis_interaction[k] = v
+            else:
+                # Convert any other types (lists, dicts, etc.) to JSON string
+                redis_interaction[k] = json.dumps(v) if isinstance(v, (list, dict)) else str(v)
+
         await self.redis_client.xadd(
             'learning:queue',
-            interaction,
+            redis_interaction,
             maxlen=100000,  # Keep last 100K entries
             approximate=True
         )
