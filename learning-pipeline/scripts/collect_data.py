@@ -5,6 +5,7 @@ Collects interactions from Redis learning queue and prepares training data
 """
 
 import redis
+from redis.cluster import RedisCluster, ClusterNode
 import json
 import yaml
 import argparse
@@ -28,19 +29,33 @@ class DataCollector:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-        # Connect to Redis
+        # Connect to Redis (cluster or standalone)
         redis_config = self.config['redis']
-        self.redis = redis.Redis(
-            host=redis_config['nodes'][0]['host'],
-            port=redis_config['nodes'][0]['port'],
-            password=redis_config['password'],
-            decode_responses=True
-        )
+
+        if redis_config.get('cluster_mode', False):
+            # Redis Cluster mode
+            startup_nodes = [
+                ClusterNode(node['host'], node['port'])
+                for node in redis_config['nodes']
+            ]
+            self.redis = RedisCluster(
+                startup_nodes=startup_nodes,
+                password=redis_config['password'],
+                decode_responses=True,
+            )
+            logger.info(f"Connected to Redis Cluster ({len(startup_nodes)} nodes)")
+        else:
+            # Standalone Redis
+            self.redis = redis.Redis(
+                host=redis_config['nodes'][0]['host'],
+                port=redis_config['nodes'][0]['port'],
+                password=redis_config['password'],
+                decode_responses=True
+            )
+            logger.info(f"Connected to Redis at {redis_config['nodes'][0]['host']}:{redis_config['nodes'][0]['port']}")
 
         self.queue_name = self.config['learning']['queue_name']
         self.batch_size = self.config['learning']['batch_size']
-
-        logger.info(f"Connected to Redis at {redis_config['nodes'][0]['host']}:{redis_config['nodes'][0]['port']}")
 
     def collect_batch(self, max_items: int = None) -> List[Dict[str, Any]]:
         """Collect a batch of interactions from the queue"""
@@ -68,14 +83,18 @@ class DataCollector:
             for stream_name, messages in entries:
                 for msg_id, msg_data in messages:
                     try:
-                        # Parse interaction data
+                        # Parse interaction data (support both old and new field names)
                         interaction = {
                             'id': msg_id.decode() if isinstance(msg_id, bytes) else msg_id,
                             'timestamp': msg_data.get('timestamp', ''),
-                            'tool': msg_data.get('tool', ''),
-                            'input': msg_data.get('input', ''),
-                            'output': msg_data.get('output', ''),
-                            'success': msg_data.get('success', 'true') == 'true',
+                            'tool': msg_data.get('tool_used') or msg_data.get('tool', ''),
+                            'input': msg_data.get('user_query') or msg_data.get('input', ''),
+                            'output': msg_data.get('result') or msg_data.get('output', ''),
+                            'success': str(msg_data.get('success', 'true')).lower() in ('true', '1', 'yes'),
+                            'metadata': {
+                                k: v for k, v in msg_data.items()
+                                if k not in ('tool_used', 'tool', 'user_query', 'input', 'result', 'output', 'success', 'timestamp')
+                            }
                         }
                         interactions.append(interaction)
                     except Exception as e:
@@ -96,16 +115,14 @@ class DataCollector:
             if not item['success']:
                 continue  # Skip failed interactions
 
-            # Format as instruction-following task
-            instruction = f"Use the {item['tool']} tool to: {item['input']}"
-            response = item['output']
-
-            # Create training example in Alpaca format
+            # Format for system tool interaction training
             example = {
-                'instruction': instruction,
-                'input': '',
-                'output': response,
-                'timestamp': item['timestamp']
+                'user_request': item['input'] if item['input'] else f"Execute {item['tool']}",
+                'tool': item['tool'],
+                'command': item['input'],  # User query becomes the command
+                'output': item['output'],
+                'timestamp': item['timestamp'],
+                'metadata': item.get('metadata', {})
             }
 
             training_data.append(example)

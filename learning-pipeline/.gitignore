@@ -1,0 +1,4 @@
+benchmarks/*.json
+data/automated/
+models/automated/
+logs/

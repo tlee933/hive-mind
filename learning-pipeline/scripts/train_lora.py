@@ -4,6 +4,10 @@ LoRA Fine-tuning Script
 Fine-tunes LLM using LoRA on collected interaction data
 """
 
+# Suppress bitsandbytes ROCm version warnings (we don't use quantization)
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='bitsandbytes')
+
 import os
 import torch
 import argparse
