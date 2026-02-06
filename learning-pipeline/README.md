@@ -1,8 +1,10 @@
 # 🧠 Hive-Mind Learning Pipeline
 
-**Portable LoRA Fine-tuning with Docker + ROCm**
+**LoRA Fine-tuning with Docker + ROCm | Native Training Validated ✅**
 
 Train your AI to learn from interactions and continuously improve!
+
+**Latest**: Successfully trained Qwen2.5-0.5B with custom PyTorch 2.9.1 + ROCm 7.12 ([results](TRAINING_RESULTS.md))
 
 ---
 
@@ -23,10 +25,17 @@ All in a **portable Docker container** with ROCm GPU support!
 
 ### Prerequisites
 
+**Option A: Docker (Portable)**
 - Docker + Docker Compose
 - ROCm 6.2+ with GPU access
 - Redis cluster running with learning queue enabled
 - 16GB+ VRAM for training
+
+**Option B: Native (Production Validated ✅)**
+- Custom PyTorch 2.9.1 for ROCm 7.12 ([build guide](PYTORCH_ROCM712_BUILD.md))
+- Python 3.14 with PEFT, transformers, datasets
+- TheRock ROCm 7.12 at `/opt/rocm`
+- 32GB VRAM (AMD Radeon AI PRO R9700)
 
 ### Build Container
 
