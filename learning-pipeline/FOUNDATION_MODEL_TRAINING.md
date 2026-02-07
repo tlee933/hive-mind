@@ -207,4 +207,24 @@ tail -f /tmp/claude-1000/-var-mnt-build-MCP-hive-mind/tasks/b1e6e12.output
 
 ---
 
-**Status:** Foundation model training in progress. Check back in ~1 hour for results.
+**Status:** ✅ Complete
+
+---
+
+## 🎯 Default Model Setup
+
+The foundation model is now the default:
+
+```bash
+# Create symlink (already done)
+ln -sfn foundation_v1 models/latest
+
+# Verify
+ls -la models/latest/
+```
+
+To use in code:
+```python
+from peft import PeftModel
+model = PeftModel.from_pretrained(base_model, "models/latest")
+```
