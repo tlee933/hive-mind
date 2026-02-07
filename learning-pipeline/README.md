@@ -4,7 +4,13 @@
 
 Train your AI to learn from interactions and continuously improve!
 
-**Latest**: Successfully trained Qwen2.5-0.5B with custom PyTorch 2.9.1 + ROCm 7.12 ([results](TRAINING_RESULTS.md))
+**Latest** (2026-02-07):
+- ✅ Qwen2.5-Coder-7B trained on 10K samples (loss: 0.30, 1h 43min)
+- ✅ Smart Optimizer for auto-config selection
+- ✅ GGUF export with quantization (Q4_K_M, Q5_K_M, Q8_0)
+- ✅ TorchAO integration for int4/int8 inference
+
+See [TRAINING_RESULTS.md](TRAINING_RESULTS.md) for full training logs.
 
 ---
 
@@ -156,25 +162,55 @@ environment:
 
 ---
 
+## 🧠 Smart Optimizer
+
+Automatically selects optimal configuration based on your hardware and model:
+
+```bash
+# Get recommended training config
+python scripts/auto_optimize.py --model "Qwen/Qwen2.5-Coder-7B" --task training --quality balanced
+
+# Get recommended inference config
+python scripts/auto_optimize.py --model "Qwen/Qwen2.5-Coder-7B" --task inference --quality fast
+
+# Get recommended export config
+python scripts/auto_optimize.py --model "Qwen/Qwen2.5-Coder-7B" --task export --quality best
+```
+
+**Auto-detects:**
+- GPU architecture (gfx1201, gfx1100, etc.)
+- Available VRAM and memory pressure
+- BF16 and Flash Attention support
+
+**Quality modes:**
+| Mode | Training | Inference | Export |
+|------|----------|-----------|--------|
+| `fast` | Large batch, low LoRA | int4 quant | Q4_K_M |
+| `balanced` | Medium batch, r=16 | int8 quant | Q5_K_M |
+| `best` | Small batch, high accum | no quant | Q8_0 |
+
+---
+
 ## 📁 Directory Structure
 
 ```
 learning-pipeline/
 ├── Dockerfile              # Container definition
 ├── docker-compose.yml      # Orchestration
-├── README.md              # This file
+├── README.md               # This file
 │
 ├── scripts/
-│   ├── collect_data.py    # Data collection from Redis
-│   ├── train_lora.py      # LoRA fine-tuning
-│   ├── pipeline.sh        # Full pipeline orchestrator
-│   └── export_model.py    # Model export/merge (TODO)
+│   ├── auto_optimize.py    # 🧠 Smart config selection
+│   ├── train_lora.py       # LoRA fine-tuning
+│   ├── export_model.py     # Model export + GGUF conversion
+│   ├── benchmark_training.py # Performance benchmarks
+│   └── pipeline.sh         # Full pipeline orchestrator
 │
-├── configs/               # Training configurations
+├── configs/                # Training configurations
 │
-├── data/                  # Training datasets (gitignored)
-│   ├── training_data_*.jsonl
-│   └── metadata_*.json
+├── data/                   # Training datasets
+│   ├── training_dataset_foundation_final.jsonl  # 10K samples
+│   └── training_data_synthetic.jsonl            # 1.5K samples
 │
 └── models/                # Trained models (gitignored)
     ├── lora_*/            # LoRA adapter checkpoints

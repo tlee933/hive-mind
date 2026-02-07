@@ -2,17 +2,35 @@
 """
 Model Export Script
 Merges LoRA adapters with base model and exports for deployment
+
+Supports:
+- HuggingFace format (safetensors)
+- GGUF format (for llama.cpp)
+- Quantization (Q4_K_M, Q5_K_M, Q8_0, etc.)
 """
 
 import os
+import subprocess
+import shutil
 import torch
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+
+# GGUF conversion tools
+CONVERT_HF_TO_GGUF = "/home/linuxbrew/.linuxbrew/bin/convert_hf_to_gguf.py"
+LLAMA_QUANTIZE = "/usr/local/bin/llama-quantize"
+
+# Available quantization types
+QUANT_TYPES = [
+    "Q4_0", "Q4_1", "Q4_K_S", "Q4_K_M",
+    "Q5_0", "Q5_1", "Q5_K_S", "Q5_K_M",
+    "Q6_K", "Q8_0", "F16", "F32"
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,14 +143,94 @@ class ModelExporter:
         logger.info(f"✅ Saved to {st_output}")
         return st_output
 
-    def export(self, formats: list = None):
+    def convert_to_gguf(self, hf_path: Path, outtype: str = "f16") -> Path:
+        """
+        Convert HuggingFace model to GGUF format
+
+        Args:
+            hf_path: Path to HuggingFace model directory
+            outtype: Output type (f16, f32, bf16, q8_0, auto)
+
+        Returns:
+            Path to GGUF file
+        """
+        if not Path(CONVERT_HF_TO_GGUF).exists():
+            raise FileNotFoundError(f"GGUF converter not found: {CONVERT_HF_TO_GGUF}")
+
+        gguf_output = self.output_path / f"model-{outtype}.gguf"
+
+        logger.info(f"Converting to GGUF ({outtype})...")
+        logger.info(f"  Input: {hf_path}")
+        logger.info(f"  Output: {gguf_output}")
+
+        cmd = [
+            "python3", CONVERT_HF_TO_GGUF,
+            str(hf_path),
+            "--outfile", str(gguf_output),
+            "--outtype", outtype
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            logger.error(f"GGUF conversion failed: {result.stderr}")
+            raise RuntimeError(f"GGUF conversion failed: {result.stderr}")
+
+        logger.info(f"✅ GGUF created: {gguf_output}")
+        logger.info(f"   Size: {gguf_output.stat().st_size / 1e9:.2f} GB")
+
+        return gguf_output
+
+    def quantize_gguf(self, gguf_path: Path, quant_type: str = "Q4_K_M") -> Path:
+        """
+        Quantize GGUF model
+
+        Args:
+            gguf_path: Path to input GGUF file
+            quant_type: Quantization type (Q4_K_M, Q5_K_M, Q8_0, etc.)
+
+        Returns:
+            Path to quantized GGUF file
+        """
+        if not Path(LLAMA_QUANTIZE).exists():
+            raise FileNotFoundError(f"llama-quantize not found: {LLAMA_QUANTIZE}")
+
+        if quant_type not in QUANT_TYPES:
+            raise ValueError(f"Invalid quant_type: {quant_type}. Must be one of: {QUANT_TYPES}")
+
+        quant_output = self.output_path / f"model-{quant_type.lower()}.gguf"
+
+        logger.info(f"Quantizing to {quant_type}...")
+        logger.info(f"  Input: {gguf_path}")
+        logger.info(f"  Output: {quant_output}")
+
+        cmd = [LLAMA_QUANTIZE, str(gguf_path), str(quant_output), quant_type]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            logger.error(f"Quantization failed: {result.stderr}")
+            raise RuntimeError(f"Quantization failed: {result.stderr}")
+
+        original_size = gguf_path.stat().st_size
+        quant_size = quant_output.stat().st_size
+        compression = (1 - quant_size / original_size) * 100
+
+        logger.info(f"✅ Quantized: {quant_output}")
+        logger.info(f"   Size: {quant_size / 1e9:.2f} GB ({compression:.1f}% smaller)")
+
+        return quant_output
+
+    def export(self, formats: list = None, quant_types: list = None):
         """
         Export model in specified formats
 
         Args:
             formats: List of formats ['hf', 'safetensors', 'gguf']
+            quant_types: List of quantization types for GGUF ['Q4_K_M', 'Q5_K_M', etc.]
         """
         formats = formats or ['hf']
+        quant_types = quant_types or []
 
         # Load and merge
         self.load_and_merge()
@@ -140,33 +238,68 @@ class ModelExporter:
         # Export to requested formats
         outputs = {}
 
-        if 'hf' in formats:
+        if 'hf' in formats or 'gguf' in formats:
+            # HF format is required for GGUF conversion
             outputs['hf'] = self.save_hf_format()
 
         if 'safetensors' in formats:
             outputs['safetensors'] = self.save_safetensors()
 
         if 'gguf' in formats:
-            logger.warning("GGUF export requires llama.cpp conversion (not implemented)")
-            logger.info("To convert manually:")
-            logger.info(f"  1. python llama.cpp/convert_hf_to_gguf.py {outputs.get('hf', self.output_path)}")
-            logger.info(f"  2. ./llama.cpp/llama-quantize model.gguf model-q4_k_m.gguf Q4_K_M")
+            # Convert to GGUF (F16 base)
+            hf_path = outputs.get('hf', self.output_path / 'hf')
+            gguf_path = self.convert_to_gguf(hf_path, outtype="f16")
+            outputs['gguf'] = gguf_path
+
+            # Apply quantizations if requested
+            if quant_types:
+                outputs['quantized'] = {}
+                for qtype in quant_types:
+                    try:
+                        quant_path = self.quantize_gguf(gguf_path, qtype)
+                        outputs['quantized'][qtype] = quant_path
+                    except Exception as e:
+                        logger.error(f"Failed to quantize to {qtype}: {e}")
 
         logger.info("Export complete!")
         return outputs
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Export merged model')
+    parser = argparse.ArgumentParser(
+        description='Export merged model (LoRA + Base → HF/GGUF)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Export to HuggingFace format only
+  python export_model.py --lora-path models/lora --base-model Qwen/Qwen2.5-0.5B --output models/merged
+
+  # Export to GGUF with Q4_K_M quantization
+  python export_model.py --lora-path models/lora --base-model Qwen/Qwen2.5-0.5B --output models/merged \\
+      --formats hf gguf --quant Q4_K_M
+
+  # Export with multiple quantizations
+  python export_model.py --lora-path models/lora --base-model Qwen/Qwen2.5-0.5B --output models/merged \\
+      --formats gguf --quant Q4_K_M Q5_K_M Q8_0
+        """
+    )
     parser.add_argument('--lora-path', type=str, required=True, help='Path to LoRA adapters')
     parser.add_argument('--base-model', type=str, required=True, help='Base model name or path')
     parser.add_argument('--output', type=str, required=True, help='Output directory')
     parser.add_argument('--formats', type=str, nargs='+', default=['hf'],
                         choices=['hf', 'safetensors', 'gguf'],
-                        help='Export formats')
+                        help='Export formats (default: hf)')
+    parser.add_argument('--quant', type=str, nargs='+', default=[],
+                        choices=QUANT_TYPES,
+                        help=f'Quantization types for GGUF. Options: {", ".join(QUANT_TYPES)}')
     parser.add_argument('--device-map', type=str, default='auto', help='Device mapping')
 
     args = parser.parse_args()
+
+    # Validate: quant requires gguf format
+    if args.quant and 'gguf' not in args.formats:
+        logger.warning("--quant specified but 'gguf' not in formats. Adding 'gguf' to formats.")
+        args.formats.append('gguf')
 
     try:
         exporter = ModelExporter(
@@ -176,11 +309,17 @@ def main():
             device_map=args.device_map
         )
 
-        outputs = exporter.export(formats=args.formats)
+        outputs = exporter.export(formats=args.formats, quant_types=args.quant)
 
+        logger.info("=" * 60)
         logger.info("✅ All exports complete!")
+        logger.info("=" * 60)
         for format_name, path in outputs.items():
-            logger.info(f"  {format_name}: {path}")
+            if format_name == 'quantized':
+                for qtype, qpath in path.items():
+                    logger.info(f"  {qtype}: {qpath}")
+            else:
+                logger.info(f"  {format_name}: {path}")
 
     except Exception as e:
         logger.error(f"Export failed: {e}", exc_info=True)
