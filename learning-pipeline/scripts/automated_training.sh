@@ -6,6 +6,11 @@
 
 set -euo pipefail
 
+# ROCm stability environment variables (fixes HIPBLAS crashes)
+export HSA_FORCE_FINE_GRAIN_PCIE=1
+export GPU_MAX_HW_QUEUES=4
+export PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:512
+
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -21,9 +26,10 @@ MIN_EXAMPLES=10  # Minimum examples needed to train
 LORA_R=8
 LORA_ALPHA=16
 EPOCHS=3
-BATCH_SIZE=2
+BATCH_SIZE=auto  # Dynamic based on available VRAM
 GRAD_ACCUM=4
 LEARNING_RATE=2e-4
+VRAM_OVERHEAD=0.25  # Reserve 25% VRAM overhead
 
 # Create directories
 mkdir -p "$LOG_DIR" "$DATA_DIR" "$MODELS_DIR"
@@ -120,7 +126,8 @@ MODEL_OUTPUT="$MODELS_DIR/model_${TIMESTAMP}"
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \
     --grad-accum "$GRAD_ACCUM" \
-    --lr "$LEARNING_RATE" || error_exit "Training failed"
+    --lr "$LEARNING_RATE" \
+    --vram-overhead "$VRAM_OVERHEAD" || error_exit "Training failed"
 
 # Step 3: Verify model was saved
 log "✅ Step 3: Verifying model..."

@@ -38,6 +38,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_optimal_batch_size(overhead_percent: float = 0.20, min_batch: int = 1, max_batch: int = 32) -> int:
+    """
+    Calculate optimal batch size based on available VRAM.
+
+    Args:
+        overhead_percent: Reserve this much VRAM as overhead (default 20%)
+        min_batch: Minimum batch size to return
+        max_batch: Maximum batch size to return
+
+    Returns:
+        Optimal batch size
+    """
+    if not torch.cuda.is_available():
+        logger.warning("CUDA not available, using minimum batch size")
+        return min_batch
+
+    try:
+        # Get GPU memory info
+        device = torch.cuda.current_device()
+        total_memory = torch.cuda.get_device_properties(device).total_memory
+        allocated_memory = torch.cuda.memory_allocated(device)
+        free_memory = total_memory - allocated_memory
+
+        # Calculate usable memory (free minus overhead)
+        usable_memory = free_memory * (1 - overhead_percent)
+
+        # Estimate memory per sample (empirical: ~40MB per sample for Qwen-0.5B with BF16)
+        # This is a conservative estimate based on model size and precision
+        memory_per_sample = 40 * 1024 * 1024  # 40 MB in bytes
+
+        # Calculate batch size
+        estimated_batch = int(usable_memory / memory_per_sample)
+
+        # Clamp to min/max range
+        optimal_batch = max(min_batch, min(estimated_batch, max_batch))
+
+        # Log memory stats
+        logger.info(f"GPU Memory: Total={total_memory / 1e9:.2f}GB, "
+                   f"Allocated={allocated_memory / 1e9:.2f}GB, "
+                   f"Free={free_memory / 1e9:.2f}GB")
+        logger.info(f"Usable (with {overhead_percent*100}% overhead): {usable_memory / 1e9:.2f}GB")
+        logger.info(f"Calculated optimal batch size: {optimal_batch}")
+
+        return optimal_batch
+
+    except Exception as e:
+        logger.warning(f"Error calculating optimal batch size: {e}. Using minimum: {min_batch}")
+        return min_batch
+
+
 class LoRATrainer:
     """Manages LoRA fine-tuning"""
 
@@ -224,10 +274,24 @@ def main():
     parser.add_argument('--lora-dropout', type=float, default=0.05, help='LoRA dropout')
     parser.add_argument('--lr', type=float, default=2e-4, help='Learning rate')
     parser.add_argument('--epochs', type=int, default=3, help='Training epochs')
-    parser.add_argument('--batch-size', type=int, default=4, help='Batch size')
+    parser.add_argument('--batch-size', type=str, default='auto',
+                       help='Batch size (integer or "auto" to calculate based on free VRAM)')
     parser.add_argument('--grad-accum', type=int, default=4, help='Gradient accumulation steps')
+    parser.add_argument('--vram-overhead', type=float, default=0.20,
+                       help='VRAM overhead percentage to reserve (default 0.20 = 20%%)')
 
     args = parser.parse_args()
+
+    # Calculate batch size if auto
+    if args.batch_size == 'auto':
+        batch_size = get_optimal_batch_size(overhead_percent=args.vram_overhead)
+        logger.info(f"Auto-calculated batch size: {batch_size}")
+    else:
+        try:
+            batch_size = int(args.batch_size)
+        except ValueError:
+            logger.error(f"Invalid batch-size: {args.batch_size}. Use integer or 'auto'")
+            return
 
     trainer = LoRATrainer(
         model_name=args.model,
@@ -238,7 +302,7 @@ def main():
         lora_dropout=args.lora_dropout,
         learning_rate=args.lr,
         num_epochs=args.epochs,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         gradient_accumulation_steps=args.grad_accum,
     )
 
