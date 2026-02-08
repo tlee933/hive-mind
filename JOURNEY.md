@@ -167,16 +167,51 @@ Connected HiveCoder-7B directly into the hive-mind architecture:
 - **VRAM Usage**: ~7 GB (model + KV cache)
 - **Response Caching**: Redis-backed with 30min TTL
 
-### Services
+### Production Services (systemd)
 
+Two systemd services manage the full stack:
+
+| Service | Description | Port |
+|---------|-------------|------|
+| `hivecoder-llm` | llama-server with HiveCoder-7B | 8089 |
+| `hive-mind-http` | HTTP API (depends on hivecoder-llm) | 8090 |
+
+**Service Management:**
 ```bash
-# Start HiveCoder LLM server
-sudo systemctl start hivecoder-llm
+# Enable auto-start on boot
+sudo systemctl enable hivecoder-llm hive-mind-http
+
+# Start/Stop/Restart
+sudo systemctl start hivecoder-llm hive-mind-http
+sudo systemctl stop hivecoder-llm hive-mind-http
+sudo systemctl restart hivecoder-llm hive-mind-http
 
 # Check status
-curl http://localhost:8089/health
-curl http://localhost:8090/llm/status
+sudo systemctl status hivecoder-llm hive-mind-http
+
+# View logs
+sudo journalctl -u hivecoder-llm -f
+sudo journalctl -u hive-mind-http -f
 ```
+
+**Health Checks:**
+```bash
+# LLM server
+curl http://localhost:8089/health
+# → {"status":"ok"}
+
+# HTTP API + LLM status
+curl http://localhost:8090/llm/status
+# → {"model":"HiveCoder-7B","status":"online",...}
+
+# Full stats
+curl http://localhost:8090/stats
+# → Redis info, session counts, LLM status
+```
+
+**Service Files:**
+- `/etc/systemd/system/hivecoder-llm.service`
+- `/etc/systemd/system/hive-mind-http.service`
 
 ---
 
