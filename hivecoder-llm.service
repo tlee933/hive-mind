@@ -9,22 +9,8 @@ User=hashcat
 Group=hashcat
 WorkingDirectory=/var/mnt/build/MCP/hive-mind/learning-pipeline
 
-# ROCm environment for RDNA4
-Environment="HSA_OVERRIDE_GFX_VERSION=12.0.1"
-Environment="ROCM_PATH=/opt/rocm"
-Environment="HIP_PATH=/opt/rocm"
-Environment="PATH=/opt/rocm/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="LD_LIBRARY_PATH=/opt/rocm/lib"
-
-# llama-server with HiveCoder-7B
-ExecStart=/usr/local/bin/llama-server \
-    -m /var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_7b_export/HiveCoder-7B-Q5_K_M.gguf \
-    --host 127.0.0.1 \
-    --port 8089 \
-    -ngl 99 \
-    -c 8192 \
-    --threads 12 \
-    -np 4
+# Use wrapper script for proper environment setup
+ExecStart=/bin/bash /var/mnt/build/MCP/hive-mind/scripts/start-hivecoder.sh
 
 # Auto-restart on failure
 Restart=on-failure
@@ -34,11 +20,8 @@ RestartSec=10
 LimitNOFILE=65536
 LimitMEMLOCK=infinity
 
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/var/mnt/build/MCP/hive-mind/learning-pipeline/models
+# Security hardening (relaxed for GPU access)
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
