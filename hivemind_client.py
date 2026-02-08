@@ -158,6 +158,86 @@ class HiveMindClient:
         response.raise_for_status()
         return response.json()
 
+    # ========== LLM Inference Methods ==========
+
+    def llm_generate(self, prompt: str, mode: str = "code",
+                    max_tokens: Optional[int] = None,
+                    temperature: Optional[float] = None,
+                    use_cache: bool = True) -> Dict[str, Any]:
+        """Generate text using HiveCoder-7B
+
+        Args:
+            prompt: The prompt to send to the model
+            mode: System prompt mode ('code', 'explain', 'debug')
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            use_cache: Whether to cache the response
+
+        Returns:
+            Dict with response, usage stats, etc.
+        """
+        payload = {
+            "prompt": prompt,
+            "mode": mode,
+            "use_cache": use_cache
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+
+        response = requests.post(f"{self.base_url}/llm/generate", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def llm_code_assist(self, code: str, task: str = "review",
+                       language: str = "python") -> Dict[str, Any]:
+        """Get code assistance from HiveCoder-7B
+
+        Args:
+            code: The code to analyze or modify
+            task: Task type ('review', 'fix', 'optimize', 'explain', 'document')
+            language: Programming language
+
+        Returns:
+            Dict with response and task info
+        """
+        response = requests.post(
+            f"{self.base_url}/llm/code-assist",
+            json={"code": code, "task": task, "language": language}
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def llm_complete(self, prefix: str, suffix: str = "",
+                    max_tokens: int = 256) -> Dict[str, Any]:
+        """Code completion using HiveCoder-7B
+
+        Args:
+            prefix: Code before cursor
+            suffix: Code after cursor
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            Dict with completion
+        """
+        response = requests.post(
+            f"{self.base_url}/llm/complete",
+            json={"prefix": prefix, "suffix": suffix, "max_tokens": max_tokens}
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def llm_status(self) -> Dict[str, Any]:
+        """Check HiveCoder-7B status
+
+        Returns:
+            Dict with model name, status, and endpoint
+        """
+        response = requests.get(f"{self.base_url}/llm/status")
+        response.raise_for_status()
+        return response.json()
+
 
 def main():
     """Example usage"""
@@ -197,6 +277,31 @@ def main():
         print(f"✅ Recent sessions: {len(sessions['sessions'])}")
         for session in sessions['sessions'][:3]:
             print(f"   - {session['session_id']}: {session['context']}")
+
+        # Test LLM inference
+        print("\n--- LLM Inference Tests ---")
+        try:
+            llm_stat = hive.llm_status()
+            print(f"✅ LLM Model: {llm_stat['model']}")
+            print(f"   Status: {llm_stat['status']}")
+
+            if llm_stat['status'] == 'online':
+                # Test generation
+                result = hive.llm_generate(
+                    prompt="Write a Python function to check if a number is prime",
+                    mode="code",
+                    max_tokens=256
+                )
+                if result.get('success'):
+                    print(f"✅ LLM Generation: {result['usage']['completion_tokens']} tokens")
+                    print(f"   Preview: {result['response'][:100]}...")
+                else:
+                    print(f"⚠️ LLM Generation failed: {result.get('error')}")
+            else:
+                print("⚠️ LLM server is offline, skipping generation tests")
+
+        except Exception as e:
+            print(f"⚠️ LLM tests skipped: {e}")
 
         print("\n🎉 All tests passed!")
 

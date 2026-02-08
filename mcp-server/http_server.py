@@ -48,6 +48,27 @@ class ToolCacheSetRequest(BaseModel):
 class LearningQueueAddRequest(BaseModel):
     interaction: Dict[str, Any]
 
+
+# LLM Inference request models
+class LLMGenerateRequest(BaseModel):
+    prompt: str
+    mode: str = "code"  # code, explain, debug
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    use_cache: bool = True
+
+
+class LLMCodeAssistRequest(BaseModel):
+    code: str
+    task: str = "review"  # review, fix, optimize, explain, document
+    language: str = "python"
+
+
+class LLMCompleteRequest(BaseModel):
+    prefix: str
+    suffix: str = ""
+    max_tokens: int = 256
+
 # Create FastAPI app
 app = FastAPI(
     title="Hive-Mind HTTP API",
@@ -211,6 +232,90 @@ async def get_stats():
     except Exception as e:
         logger.error(f"Error in get_stats: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ========== LLM Inference Endpoints ==========
+
+@app.post("/llm/generate")
+async def llm_generate(request: LLMGenerateRequest):
+    """Generate text using HiveCoder-7B"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        result = await hive_mind.llm_generate(
+            prompt=request.prompt,
+            mode=request.mode,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            use_cache=request.use_cache
+        )
+        if not result.get('success'):
+            raise HTTPException(status_code=500, detail=result.get('error', 'Unknown error'))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in llm_generate: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/llm/code-assist")
+async def llm_code_assist(request: LLMCodeAssistRequest):
+    """Get code assistance from HiveCoder-7B"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        result = await hive_mind.llm_code_assist(
+            code=request.code,
+            task=request.task,
+            language=request.language
+        )
+        if not result.get('success'):
+            raise HTTPException(status_code=500, detail=result.get('error', 'Unknown error'))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in llm_code_assist: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/llm/complete")
+async def llm_complete(request: LLMCompleteRequest):
+    """Code completion using HiveCoder-7B"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        result = await hive_mind.llm_complete(
+            prefix=request.prefix,
+            suffix=request.suffix,
+            max_tokens=request.max_tokens
+        )
+        if not result.get('success'):
+            raise HTTPException(status_code=500, detail=result.get('error', 'Unknown error'))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in llm_complete: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/llm/status")
+async def llm_status():
+    """Check HiveCoder-7B status"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    stats = await hive_mind.get_stats()
+    return {
+        "model": stats.get("llm_model", "none"),
+        "status": stats.get("llm_status", "disabled"),
+        "endpoint": hive_mind.config.get('inference', {}).get('endpoint', 'not configured')
+    }
 
 
 def main():

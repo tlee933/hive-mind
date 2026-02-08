@@ -11,6 +11,7 @@ mcp>=1.26.0
 fastapi>=0.128.0
 uvicorn>=0.40.0
 requests>=2.31.0
+aiohttp>=3.9.0  # Async HTTP client for LLM inference
 
 # Embeddings (Phase 2)
 sentence-transformers>=2.2.0

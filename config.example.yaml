@@ -16,7 +16,24 @@ redis:
 
 mcp:
   server_name: "hive-mind"
-  version: "0.1.0"
+  version: "0.2.0"
+
+# HiveCoder-7B Local LLM Inference
+inference:
+  enabled: true
+  endpoint: "http://127.0.0.1:8089"  # llama-server port
+  model: "HiveCoder-7B"
+  model_path: "learning-pipeline/models/foundation_7b_export/HiveCoder-7B-Q5_K_M.gguf"
+  # Inference settings
+  default_max_tokens: 512
+  default_temperature: 0.7
+  default_top_p: 0.9
+  timeout: 60  # Request timeout in seconds
+  # System prompts for different modes
+  system_prompts:
+    code: "You are HiveCoder, a helpful AI assistant specialized in Linux systems, containers, ROCm/GPU computing, and Python development. Provide clear, working code solutions."
+    explain: "You are HiveCoder. Explain the code or concept clearly and concisely."
+    debug: "You are HiveCoder. Analyze the code for bugs, issues, or improvements. Be specific about problems found."
 
 embedding:
   enabled: false  # Enable when inference node is ready
@@ -28,9 +45,10 @@ cache:
   tool_ttl: 3600        # 1 hour
   session_ttl: 604800   # 7 days
   embedding_ttl: 2592000  # 30 days
+  inference_ttl: 1800   # 30 minutes for LLM responses
 
 learning:
-  enabled: false  # Enable in Phase 4
+  enabled: true  # Learning from interactions
   queue_name: "learning:queue"
   batch_size: 100
   max_queue_length: 100000

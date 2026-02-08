@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import aiohttp
 import redis.asyncio as aioredis
 from redis.asyncio.cluster import RedisCluster, ClusterNode
 import yaml
@@ -287,6 +288,22 @@ class HiveMindMCP:
         except Exception:
             queue_length = 0
 
+        # Check LLM inference status
+        llm_status = "disabled"
+        if self.config.get('inference', {}).get('enabled', False):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{self.config['inference']['endpoint']}/health",
+                        timeout=aiohttp.ClientTimeout(total=2)
+                    ) as resp:
+                        if resp.status == 200:
+                            llm_status = "online"
+                        else:
+                            llm_status = "error"
+            except Exception:
+                llm_status = "offline"
+
         return {
             'redis_version': info.get('redis_version', 'unknown'),
             'connected_clients': info.get('connected_clients', 0),
@@ -295,7 +312,146 @@ class HiveMindMCP:
             'learning_queue_length': queue_length,
             'current_session': self.session_id,
             'cluster_mode': self.config['redis'].get('cluster_mode', False),
+            'llm_model': self.config.get('inference', {}).get('model', 'none'),
+            'llm_status': llm_status,
         }
+
+    # ========== LLM Inference Methods ==========
+
+    async def llm_generate(self, prompt: str, mode: str = "code",
+                          max_tokens: Optional[int] = None,
+                          temperature: Optional[float] = None,
+                          use_cache: bool = True) -> Dict[str, Any]:
+        """
+        Generate text using HiveCoder-7B
+
+        Args:
+            prompt: The prompt to send to the model
+            mode: System prompt mode ('code', 'explain', 'debug')
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            use_cache: Whether to cache the response
+        """
+        inference_config = self.config.get('inference', {})
+        if not inference_config.get('enabled', False):
+            return {'success': False, 'error': 'LLM inference is not enabled'}
+
+        # Check cache first
+        if use_cache:
+            cache_key = hashlib.sha256(f"{prompt}:{mode}:{max_tokens}:{temperature}".encode()).hexdigest()[:16]
+            cached = await self.redis_client.get(f"llm:cache:{cache_key}")
+            if cached:
+                logger.info(f"LLM cache HIT for prompt: {prompt[:50]}...")
+                return json.loads(cached)
+
+        # Build request
+        system_prompt = inference_config.get('system_prompts', {}).get(mode,
+            "You are HiveCoder, a helpful AI coding assistant.")
+
+        payload = {
+            "model": inference_config.get('model', 'HiveCoder-7B'),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": max_tokens or inference_config.get('default_max_tokens', 512),
+            "temperature": temperature if temperature is not None else inference_config.get('default_temperature', 0.7),
+            "top_p": inference_config.get('default_top_p', 0.9),
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=inference_config.get('timeout', 60))
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{inference_config['endpoint']}/v1/chat/completions",
+                    json=payload
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        return {'success': False, 'error': f"LLM request failed: {error_text}"}
+
+                    data = await resp.json()
+
+            # Extract response
+            response_text = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            usage = data.get('usage', {})
+
+            result = {
+                'success': True,
+                'response': response_text,
+                'model': inference_config.get('model', 'HiveCoder-7B'),
+                'mode': mode,
+                'usage': {
+                    'prompt_tokens': usage.get('prompt_tokens', 0),
+                    'completion_tokens': usage.get('completion_tokens', 0),
+                    'total_tokens': usage.get('total_tokens', 0),
+                }
+            }
+
+            # Cache the result
+            if use_cache:
+                cache_ttl = self.config.get('cache', {}).get('inference_ttl', 1800)
+                await self.redis_client.setex(
+                    f"llm:cache:{cache_key}",
+                    cache_ttl,
+                    json.dumps(result)
+                )
+
+            logger.info(f"LLM generated {usage.get('completion_tokens', 0)} tokens for mode={mode}")
+            return result
+
+        except asyncio.TimeoutError:
+            return {'success': False, 'error': 'LLM request timed out'}
+        except Exception as e:
+            logger.error(f"LLM generation error: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+    async def llm_code_assist(self, code: str, task: str = "review",
+                             language: str = "python") -> Dict[str, Any]:
+        """
+        Code assistance using HiveCoder-7B
+
+        Args:
+            code: The code to analyze/modify
+            task: Task type ('review', 'fix', 'optimize', 'explain', 'document')
+            language: Programming language
+        """
+        task_prompts = {
+            'review': f"Review this {language} code for issues, bugs, and improvements:\n\n```{language}\n{code}\n```",
+            'fix': f"Fix any bugs in this {language} code and explain what was wrong:\n\n```{language}\n{code}\n```",
+            'optimize': f"Optimize this {language} code for better performance:\n\n```{language}\n{code}\n```",
+            'explain': f"Explain what this {language} code does, step by step:\n\n```{language}\n{code}\n```",
+            'document': f"Add comprehensive docstrings and comments to this {language} code:\n\n```{language}\n{code}\n```",
+        }
+
+        prompt = task_prompts.get(task, task_prompts['review'])
+        mode_map = {'review': 'debug', 'fix': 'debug', 'optimize': 'code',
+                   'explain': 'explain', 'document': 'code'}
+
+        result = await self.llm_generate(prompt, mode=mode_map.get(task, 'code'))
+        if result.get('success'):
+            result['task'] = task
+            result['language'] = language
+        return result
+
+    async def llm_complete(self, prefix: str, suffix: str = "",
+                          max_tokens: int = 256) -> Dict[str, Any]:
+        """
+        Code completion using HiveCoder-7B (FIM style)
+
+        Args:
+            prefix: Code before cursor
+            suffix: Code after cursor
+            max_tokens: Maximum tokens to generate
+        """
+        # Build FIM-style prompt
+        if suffix:
+            prompt = f"Complete the code between the markers:\n\n```\n{prefix}\n<CURSOR>\n{suffix}\n```\n\nProvide only the code that goes at <CURSOR>:"
+        else:
+            prompt = f"Complete this code:\n\n```\n{prefix}\n```\n\nProvide the completion:"
+
+        result = await self.llm_generate(prompt, mode='code', max_tokens=max_tokens)
+        return result
 
 
 async def main():
@@ -427,10 +583,91 @@ async def main():
             ),
             Tool(
                 name="get_stats",
-                description="Get Hive-Mind system statistics (Redis info, session counts, queue lengths, etc.)",
+                description="Get Hive-Mind system statistics (Redis info, session counts, queue lengths, LLM status, etc.)",
                 inputSchema={
                     "type": "object",
                     "properties": {}
+                }
+            ),
+            Tool(
+                name="llm_generate",
+                description="Generate text using HiveCoder-7B local LLM. Use for code generation, explanations, or debugging assistance.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "The prompt to send to HiveCoder"
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["code", "explain", "debug"],
+                            "description": "System prompt mode (default: code)",
+                            "default": "code"
+                        },
+                        "max_tokens": {
+                            "type": "number",
+                            "description": "Maximum tokens to generate (default: 512)"
+                        },
+                        "temperature": {
+                            "type": "number",
+                            "description": "Sampling temperature 0.0-2.0 (default: 0.7)"
+                        },
+                        "use_cache": {
+                            "type": "boolean",
+                            "description": "Whether to cache the response (default: true)",
+                            "default": True
+                        }
+                    },
+                    "required": ["prompt"]
+                }
+            ),
+            Tool(
+                name="llm_code_assist",
+                description="Get code assistance from HiveCoder-7B. Review, fix, optimize, explain, or document code.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "The code to analyze or modify"
+                        },
+                        "task": {
+                            "type": "string",
+                            "enum": ["review", "fix", "optimize", "explain", "document"],
+                            "description": "The type of assistance needed",
+                            "default": "review"
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "Programming language (default: python)",
+                            "default": "python"
+                        }
+                    },
+                    "required": ["code"]
+                }
+            ),
+            Tool(
+                name="llm_complete",
+                description="Code completion using HiveCoder-7B. Provide code prefix and optional suffix for FIM-style completion.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "prefix": {
+                            "type": "string",
+                            "description": "Code before the cursor position"
+                        },
+                        "suffix": {
+                            "type": "string",
+                            "description": "Code after the cursor position (optional)"
+                        },
+                        "max_tokens": {
+                            "type": "number",
+                            "description": "Maximum tokens to generate (default: 256)",
+                            "default": 256
+                        }
+                    },
+                    "required": ["prefix"]
                 }
             )
         ]
@@ -474,6 +711,26 @@ async def main():
                 result = {"success": True}
             elif name == "get_stats":
                 result = await hive_mind.get_stats()
+            elif name == "llm_generate":
+                result = await hive_mind.llm_generate(
+                    prompt=arguments["prompt"],
+                    mode=arguments.get("mode", "code"),
+                    max_tokens=arguments.get("max_tokens"),
+                    temperature=arguments.get("temperature"),
+                    use_cache=arguments.get("use_cache", True)
+                )
+            elif name == "llm_code_assist":
+                result = await hive_mind.llm_code_assist(
+                    code=arguments["code"],
+                    task=arguments.get("task", "review"),
+                    language=arguments.get("language", "python")
+                )
+            elif name == "llm_complete":
+                result = await hive_mind.llm_complete(
+                    prefix=arguments["prefix"],
+                    suffix=arguments.get("suffix", ""),
+                    max_tokens=arguments.get("max_tokens", 256)
+                )
             else:
                 result = {"error": f"Unknown tool: {name}"}
 
