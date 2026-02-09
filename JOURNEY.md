@@ -117,7 +117,7 @@ HiveCoder-7B-Q5_K_M.gguf → 5.1 GB (quantized)
 - [x] **HiveCoder-7B**: First Foundation Model (Feb 8) 🎉
 - [x] **Phase 5**: HiveCoder Integration (Feb 8) 🔗
 - [x] **Phase 6**: DELL Multi-Node (Feb 8) 🖥️
-- [ ] **Phase 7**: Continuous Learning
+- [x] **Phase 7**: Continuous Learning (Feb 8) 🧠
 
 ---
 
@@ -293,6 +293,76 @@ systemctl --user status hive-mind-embedding
 systemctl --user restart hive-mind-embedding
 journalctl --user -u hive-mind-embedding -f
 ```
+
+---
+
+## Continuous Learning (February 8, 2026)
+
+### The Self-Improving System
+
+HiveCoder now learns from every interaction:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    🧠 CONTINUOUS LEARNING PIPELINE                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐        │
+│   │ Interact │───▶│ Collect  │───▶│  Filter  │───▶│  Train   │        │
+│   │ (MCP)    │    │ (Redis)  │    │ (Quality)│    │ (LoRA)   │        │
+│   └──────────┘    └──────────┘    └──────────┘    └────┬─────┘        │
+│                                                         │              │
+│                                                         ▼              │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐        │
+│   │  Serve   │◀───│  Deploy  │◀───│  Export  │◀───│ Evaluate │        │
+│   │ (llama)  │    │(hot-swap)│    │  (GGUF)  │    │ (bench)  │        │
+│   └──────────┘    └──────────┘    └──────────┘    └──────────┘        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+1. **Collect**: Every tool interaction goes to Redis learning queue
+2. **Filter**: Quality filter removes failed/low-value interactions
+3. **Batch**: When threshold (100 samples) is reached, trigger training
+4. **Train**: Quick LoRA fine-tuning (1 epoch incremental)
+5. **Export**: Convert to GGUF for llama.cpp
+6. **Deploy**: Hot-swap model without downtime
+
+### Commands
+
+```bash
+# Check status
+python learning-pipeline/scripts/continuous_learning.py --status
+
+# Collect data only
+python learning-pipeline/scripts/continuous_learning.py --collect-only
+
+# Force training now
+python learning-pipeline/scripts/continuous_learning.py --train-now
+
+# Run as daemon (checks every 5 min)
+python learning-pipeline/scripts/continuous_learning.py --daemon
+```
+
+### Service
+
+```bash
+# Enable continuous learning daemon
+sudo systemctl enable hivecoder-learning
+sudo systemctl start hivecoder-learning
+
+# Check logs
+sudo journalctl -u hivecoder-learning -f
+```
+
+### Storage Strategy
+
+| Location | Type | Purpose |
+|----------|------|---------|
+| BEAST SSD | Fast | Active training data, current model |
+| DELL HDD (3TB) | Archive | Model versions, backups, datasets |
 
 ---
 

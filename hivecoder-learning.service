@@ -1,0 +1,26 @@
+[Unit]
+Description=HiveCoder Continuous Learning Daemon
+After=network.target hivecoder-llm.service
+Wants=hivecoder-llm.service
+Documentation=https://github.com/tlee933/hive-mind
+
+[Service]
+Type=simple
+User=hashcat
+Group=hashcat
+WorkingDirectory=/var/mnt/build/MCP/hive-mind
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/var/mnt/build/MCP/hive-mind/.venv/bin/python learning-pipeline/scripts/continuous_learning.py --daemon --interval 300
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hivecoder-learning
+
+# Resource limits
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=8G
+
+[Install]
+WantedBy=multi-user.target
