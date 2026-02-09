@@ -224,7 +224,6 @@ Originally started with a Dell Precision T3620, but upgraded to a **Dell PowerEd
 | Spec | R720xd | BEAST |
 |------|--------|-------|
 | Hostname | r720xd | aurora |
-| IP | 192.168.1.10 | 192.168.1.100 |
 | CPU | Dual Xeon E5-2660 (16c/32t) | AMD (ROCm) |
 | RAM | 64 GB | 32 GB |
 | Storage | 24x 2.5" bays | SSD |
@@ -241,7 +240,7 @@ Originally started with a Dell Precision T3620, but upgraded to a **Dell PowerEd
 │                                                                          │
 │  ┌─────────────────────────────┐    ┌─────────────────────────────┐     │
 │  │         BEAST               │    │         R720XD              │     │
-│  │     192.168.1.100           │    │      192.168.1.10           │     │
+│  │     (aurora)                │    │      (r720xd)               │     │
 │  │                             │    │                             │     │
 │  │  ┌─────────────────────┐   │    │  ┌─────────────────────┐   │     │
 │  │  │ Redis Cluster       │◀──┼────┼──│ Podman Containers   │   │     │
@@ -272,10 +271,42 @@ Originally started with a Dell Precision T3620, but upgraded to a **Dell PowerEd
 - PERC H710P Mini RAID controller
 - 24x 2.5" drive bays (empty, ready for expansion)
 - Dual redundant PSUs
+- iDRAC 7 Enterprise (out-of-band management)
 
 **Upgrade path:**
-- CPU: E5-2697 v2 ($30-40 each) → 24c/48t
+- CPU: E5-2697 v2 (~$50/pair) → 24c/48t
 - GPU: External PCIe box with RX 6700 XT (12GB)
+
+### iDRAC & Firmware (February 9, 2026)
+
+Configured iDRAC for remote management and updated firmware:
+
+| Component | Before | After |
+|-----------|--------|-------|
+| BIOS | 1.4.8 (2012) | **2.9.0** (latest) |
+| iDRAC | 2.65.65.65 | 2.65.65.65 (latest) |
+
+**iDRAC Configuration:**
+- Static IP on local network
+- Custom hostname
+- Local DNS resolver
+- SSH enabled (for racadm access)
+- Web UI accessible
+
+**BIOS 2.9.0 Benefits:**
+- Enhanced security (Intel SINIT v2.5.1)
+- CPU microcode updates (Spectre/Meltdown fixes)
+- Full E5-2600 v2 processor support
+- Improved fan curves (quieter operation!)
+- 8 years of stability fixes
+
+**Remote Management:**
+```bash
+# Check temps via IPMI
+sudo ipmitool sdr type Temperature
+
+# Access iDRAC web UI or SSH for racadm
+```
 
 ### Security Hardening
 
@@ -295,11 +326,11 @@ Running `sentence-transformers` in Podman container:
 
 ```bash
 # Health check
-curl http://192.168.1.10:8081/health
+curl http://<r720xd>:8081/health
 # → {"status":"ok","model_loaded":true}
 
 # Generate embeddings
-curl -X POST http://192.168.1.10:8081/embed \
+curl -X POST http://<r720xd>:8081/embed \
   -H "Content-Type: application/json" \
   -d '{"texts":["Hello world","Test embedding"]}'
 # → {"embeddings":[[0.1,0.2,...],[0.3,0.4,...]],"dimensions":384}
@@ -420,7 +451,7 @@ Built with:
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 8, 2026
+**Date**: February 9, 2026
 **Author**: hashcat
 
 ---
