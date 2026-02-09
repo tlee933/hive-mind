@@ -116,7 +116,7 @@ HiveCoder-7B-Q5_K_M.gguf → 5.1 GB (quantized)
 - [x] **Phase 4.5**: Smart Optimizer (Feb 7)
 - [x] **HiveCoder-7B**: First Foundation Model (Feb 8) 🎉
 - [x] **Phase 5**: HiveCoder Integration (Feb 8) 🔗
-- [x] **Phase 6**: DELL Multi-Node (Feb 8) 🖥️
+- [x] **Phase 6**: R720xd Multi-Node (Feb 8-9) 🖥️
 - [x] **Phase 7**: Continuous Learning (Feb 8) 🧠
 
 ---
@@ -215,19 +215,22 @@ curl http://localhost:8090/stats
 
 ---
 
-## DELL Multi-Node Integration (February 8, 2026)
+## R720xd Multi-Node Integration (February 8-9, 2026)
 
-### The Second Node
+### The Second Node - Upgraded!
 
-Added DELL as a secondary compute node for embeddings:
+Originally started with a Dell Precision T3620, but upgraded to a **Dell PowerEdge R720xd** rack server (acquired free!).
 
-| Spec | DELL | BEAST |
-|------|------|-------|
+| Spec | R720xd | BEAST |
+|------|--------|-------|
+| Hostname | r720xd | aurora |
 | IP | 192.168.1.10 | 192.168.1.100 |
-| RAM | 64 GB | 128 GB |
-| GPU | (pending upgrade) | AMD Radeon AI PRO R9700 (32GB) |
-| Role | Embeddings (CPU) | LLM Inference + Training |
-| OS | Fedora 43 Live | Fedora 43 bootc |
+| CPU | Dual Xeon E5-2660 (16c/32t) | AMD (ROCm) |
+| RAM | 64 GB | 32 GB |
+| Storage | 24x 2.5" bays | SSD |
+| GPU | External 6700XT planned | AMD R9700 (32GB) |
+| Role | Embeddings + Storage | LLM Inference + Training |
+| OS | uCore (Fedora 43 Atomic) | Fedora 43 bootc |
 
 ### Multi-Node Architecture
 
@@ -237,43 +240,58 @@ Added DELL as a secondary compute node for embeddings:
 ├──────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │  ┌─────────────────────────────┐    ┌─────────────────────────────┐     │
-│  │         BEAST               │    │          DELL               │     │
+│  │         BEAST               │    │         R720XD              │     │
 │  │     192.168.1.100           │    │      192.168.1.10           │     │
 │  │                             │    │                             │     │
 │  │  ┌─────────────────────┐   │    │  ┌─────────────────────┐   │     │
-│  │  │ Redis Cluster       │◀──┼────┼──│ Redis Client        │   │     │
-│  │  │ (6 nodes: 7000-7005)│   │    │  │ (connects to BEAST) │   │     │
+│  │  │ Redis Cluster       │◀──┼────┼──│ Podman Containers   │   │     │
+│  │  │ (6 nodes: 7000-7005)│   │    │  │ (hive-embedding)    │   │     │
 │  │  └─────────────────────┘   │    │  └─────────────────────┘   │     │
 │  │                             │    │                             │     │
 │  │  ┌─────────────────────┐   │    │  ┌─────────────────────┐   │     │
 │  │  │ HiveCoder-7B        │   │    │  │ Embedding Service   │   │     │
-│  │  │ (llama-server:8089) │   │    │  │ (sentence-trans:8081)│   │     │
+│  │  │ (llama-server:8089) │   │    │  │ (container:8081)    │   │     │
 │  │  └─────────────────────┘   │    │  └─────────────────────┘   │     │
 │  │                             │    │                             │     │
-│  │  ┌─────────────────────┐   │    │  Model: all-MiniLM-L6-v2   │     │
-│  │  │ HTTP API (:8090)    │   │    │  Dimensions: 384            │     │
-│  │  └─────────────────────┘   │    │  Device: CPU (64GB RAM)     │     │
+│  │  ┌─────────────────────┐   │    │  CPU: Dual E5-2660 (32t)   │     │
+│  │  │ HTTP API (:8090)    │   │    │  RAM: 64GB                  │     │
+│  │  └─────────────────────┘   │    │  Bays: 24x 2.5" available   │     │
 │  │                             │    │                             │     │
-│  │  AMD R9700 (32GB VRAM)     │    │  GPU: pending upgrade       │     │
+│  │  AMD R9700 (32GB VRAM)     │    │  GPU: 6700XT (planned)      │     │
 │  └─────────────────────────────┘    └─────────────────────────────┘     │
 │                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+### R720xd Setup
+
+**Hardware acquired (FREE!):**
+- Dell PowerEdge R720xd (2U rack server)
+- Dual Intel Xeon E5-2660 (16 cores / 32 threads total)
+- 64GB DDR3 ECC RAM
+- PERC H710P Mini RAID controller
+- 24x 2.5" drive bays (empty, ready for expansion)
+- Dual redundant PSUs
+
+**Upgrade path:**
+- CPU: E5-2697 v2 ($30-40 each) → 24c/48t
+- GPU: External PCIe box with RX 6700 XT (12GB)
+
 ### Security Hardening
 
-DELL secured with:
-- SSH key-only authentication (no passwords)
+R720xd secured with:
+- SSH key-only authentication
 - Firewall (firewalld) with minimal ports:
   - 22 (SSH)
+  - 8081 (Embedding service)
   - 7000-7005 (Redis cluster)
-  - 8080-8090 (HTTP services)
   - 26379-26381 (Sentinels)
-- Disabled services: kdeconnect, maliit-keyboard
+- uCore immutable OS (atomic updates)
+- Containerized services (Podman + Quadlet)
 
-### Embedding Service
+### Embedding Service (Containerized)
 
-Running `sentence-transformers` on CPU:
+Running `sentence-transformers` in Podman container:
 
 ```bash
 # Health check
@@ -287,12 +305,19 @@ curl -X POST http://192.168.1.10:8081/embed \
 # → {"embeddings":[[0.1,0.2,...],[0.3,0.4,...]],"dimensions":384}
 ```
 
-**Service Management (on DELL):**
+**Service Management (Quadlet on R720xd):**
 ```bash
-systemctl --user status hive-mind-embedding
-systemctl --user restart hive-mind-embedding
-journalctl --user -u hive-mind-embedding -f
+# Check status
+systemctl --user status hive-embedding
+
+# View logs
+journalctl --user -u hive-embedding -f
+
+# Restart
+systemctl --user restart hive-embedding
 ```
+
+**Container location:** `~/.config/containers/systemd/hive-embedding.container`
 
 ---
 
@@ -362,7 +387,8 @@ sudo journalctl -u hivecoder-learning -f
 | Location | Type | Purpose |
 |----------|------|---------|
 | BEAST SSD | Fast | Active training data, current model |
-| DELL HDD (3TB) | Archive | Model versions, backups, datasets |
+| R720xd (24 bays) | Expandable | Model archive, datasets, Redis backups |
+| NAS (9.2TB) | Archive | Cold storage, backups |
 
 ---
 
