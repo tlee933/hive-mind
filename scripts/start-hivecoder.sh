@@ -13,8 +13,13 @@ export LD_LIBRARY_PATH=/var/mnt/build/llama.cpp-rocm/build/bin:/opt/rocm/lib:$LD
 export GPU_MAX_HW_QUEUES=8
 export HSA_ENABLE_SDMA=0
 
-# Model path
-MODEL_PATH="/var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_7b_export/HiveCoder-7B-Q5_K_M.gguf"
+# Model path - uses symlink for hot-swap deployments
+MODEL_PATH="/var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_7b_export/HiveCoder-7B-current.gguf"
+
+# Fallback to original if symlink doesn't exist
+if [ ! -f "$MODEL_PATH" ]; then
+    MODEL_PATH="/var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_7b_export/HiveCoder-7B-Q5_K_M.gguf"
+fi
 
 # Start llama-server
 exec /usr/local/bin/llama-server \

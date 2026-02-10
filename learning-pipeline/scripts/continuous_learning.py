@@ -150,7 +150,7 @@ class ContinuousLearner:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-        self.base_dir = Path(config_path).parent.parent
+        self.base_dir = Path(config_path).parent
         self.models_dir = self.base_dir / "learning-pipeline" / "models"
         self.data_dir = self.base_dir / "learning-pipeline" / "data" / "continuous"
         self.registry = ModelRegistry(self.models_dir / "registry")
@@ -433,10 +433,10 @@ class ContinuousLearner:
 
         cmd = [
             sys.executable, str(export_script),
-            "--model", version.base_model,
-            "--adapter", version.lora_path,
+            "--base-model", version.base_model,
+            "--lora-path", version.lora_path,
             "--output", str(version_dir / "export"),
-            "--quantize", "Q5_K_M",
+            "--quant", "Q5_K_M",
         ]
 
         try:
@@ -452,10 +452,19 @@ class ContinuousLearner:
                 logger.error(f"Export failed: {result.stderr}")
                 return False
 
-            # Find GGUF file
-            gguf_files = list((version_dir / "export").glob("*.gguf"))
-            if gguf_files:
-                version.gguf_path = str(gguf_files[0])
+            # Find quantized GGUF file (prefer Q5_K_M over f16)
+            export_dir = version_dir / "export"
+            q5_file = export_dir / "model-q5_k_m.gguf"
+            f16_file = export_dir / "model-f16.gguf"
+
+            if q5_file.exists():
+                version.gguf_path = str(q5_file)
+            elif f16_file.exists():
+                version.gguf_path = str(f16_file)
+            else:
+                gguf_files = list(export_dir.glob("*.gguf"))
+                if gguf_files:
+                    version.gguf_path = str(gguf_files[0])
                 self.registry._save()
                 logger.info(f"Exported to: {version.gguf_path}")
                 return True

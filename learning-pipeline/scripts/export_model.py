@@ -10,6 +10,7 @@ Supports:
 """
 
 import os
+import sys
 import subprocess
 import shutil
 import torch
@@ -164,7 +165,7 @@ class ModelExporter:
         logger.info(f"  Output: {gguf_output}")
 
         cmd = [
-            "python3", CONVERT_HF_TO_GGUF,
+            sys.executable, CONVERT_HF_TO_GGUF,
             str(hf_path),
             "--outfile", str(gguf_output),
             "--outtype", outtype
