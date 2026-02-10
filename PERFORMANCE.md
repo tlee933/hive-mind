@@ -1,7 +1,8 @@
 # 🔥 Hive-Mind Performance Metrics
 
-**Benchmark Date**: 2026-02-01
-**System**: BEAST (R9700 XT 32GB VRAM, RDNA4 gfx1201)
+**Benchmark Date**: 2026-02-10
+**System**: BEAST (AMD R9700 32GB VRAM, RDNA4 gfx1201)
+**Model**: HiveCoder-7B (custom fine-tuned)
 
 ---
 
@@ -17,47 +18,100 @@
 | **Mixed (70R/30W)** | **12,720 ops/s** | Real-world workload |
 | **Pipelined** | **59,763 ops/s** | Batch operations (peak) |
 
-### Summary
-- **Average**: 12,701 ops/sec
-- **Peak**: 59,763 ops/sec (pipelined)
-- **Latency**: < 1ms per operation
-- **Throughput**: Excellent for distributed memory
+### Cluster Configuration
+- **Nodes**: 6 (3 masters, 3 replicas)
+- **Ports**: 7000-7005
+- **Sentinels**: 3 (26379-26381)
+- **Memory**: 4.71 MB used
+- **Sessions**: 62 total
 
 ---
 
-## 🦙 Llama-Server Inference Performance
+## 🧠 HiveCoder-7B Performance
 
-### Qwen2.5-Coder-7B (Port 8080)
+### Model Specs
 
-| Prompt Size | Tokens/Second | Use Case |
-|-------------|---------------|----------|
-| Short (10 tok) | **89.5 tok/s** | Quick code snippets |
-| Medium (50 tok) | **88.4 tok/s** | Function implementations |
-| Long (200 tok) | **89.1 tok/s** | Complex code generation |
+| Attribute | Value |
+|-----------|-------|
+| **Base Model** | Qwen2.5-Coder-7B-Instruct |
+| **Fine-tuning** | LoRA (r=16, alpha=32) |
+| **Trainable Params** | 40.3M / 7.66B (0.53%) |
+| **Quantization** | Q5_K_M (5.1 GB) |
+| **Full Precision** | F16 (15 GB) |
 
-**Average**: **89.0 tok/s**
+### Inference Performance (Port 8089)
 
-### Qwen3-8B (Port 8088)
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Generation** | **84 tok/s** | Q5_K_M quantization |
+| **Prompt Processing** | **519 tok/s** | Input tokenization |
+| **VRAM Usage** | **~7 GB** | Model + KV cache |
+| **Context Length** | **8192 tokens** | Full context window |
+| **Parallel Slots** | **4** | Concurrent requests |
 
-| Prompt Size | Tokens/Second | Use Case |
-|-------------|---------------|----------|
-| Short (10 tok) | **74.3 tok/s** | Quick queries |
-| Medium (50 tok) | **74.7 tok/s** | Reasoning tasks |
-| Long (200 tok) | **74.4 tok/s** | Complex reasoning |
+### Training Performance
 
-**Average**: **74.4 tok/s**
+| Metric | Value |
+|--------|-------|
+| **Training Time** | 1h 43min (full) / ~25s (incremental) |
+| **Final Loss** | 0.2998 |
+| **Dataset Size** | 10,156 samples (foundation) |
+| **Hardware** | AMD R9700 (32GB VRAM) |
+| **Precision** | BF16 |
 
-### VRAM Usage
-- **7B Model**: 4.2 GB VRAM
-- **8B Model**: 5.0 GB VRAM
-- **Total**: 11.2 GB / 31.9 GB (20.7 GB free)
-- **Headroom**: Can fit 30B model (~17 GB) simultaneously
+---
+
+## 🔄 Continuous Learning System
+
+### Current Status
+
+| Metric | Value |
+|--------|-------|
+| **Deployed Version** | v20260209_080704 |
+| **Pending Samples** | 24 |
+| **Training Threshold** | 50 samples |
+| **Total Versions** | 4 |
+| **Check Interval** | 5 minutes |
+
+### Pipeline Performance
+
+| Stage | Time | Notes |
+|-------|------|-------|
+| **Collect** | < 1s | From Redis queue |
+| **Filter** | < 1s | Quality filtering |
+| **Train** | ~25s | Incremental LoRA |
+| **Export (GGUF)** | ~2 min | Q5_K_M quantization |
+| **Deploy** | ~10s | Hot-swap via symlink |
+
+---
+
+## 🖥️ Multi-Node Architecture
+
+### BEAST (aurora) - Primary
+
+| Component | Spec |
+|-----------|------|
+| **Role** | GPU inference + training |
+| **GPU** | AMD R9700 (32GB VRAM) |
+| **Services** | hivecoder-llm, hive-mind-http, hivecoder-learning |
+| **Ports** | 8089 (LLM), 8090 (HTTP API) |
+
+### R720xd - Secondary
+
+| Component | Spec |
+|-----------|------|
+| **Role** | Embeddings + storage |
+| **CPU** | Dual Xeon E5-2660 (16c/32t) |
+| **RAM** | 64 GB DDR3 ECC |
+| **Storage** | 24x 2.5" bays |
+| **Services** | hive-embedding (container) |
+| **Port** | 8081 (Embeddings) |
 
 ---
 
 ## 🐝 MCP Server Performance
 
-### High-Level Operations
+### Tool Operations
 
 | Operation | Performance | Description |
 |-----------|------------|-------------|
@@ -65,105 +119,79 @@
 | **memory_recall** | **9,733 ops/s** | Retrieve session data |
 | **tool_cache_set** | **8,140 ops/s** | Cache tool outputs |
 | **tool_cache_get** | **9,798 ops/s** | Retrieve cached results |
-
-### Summary
-- **Write operations**: ~7,200 ops/s average
-- **Read operations**: ~9,765 ops/s average
-- **Latency**: Sub-millisecond
-- **Scalability**: Cluster-aware, auto-sharding
+| **llm_generate** | **84 tok/s** | Code generation |
+| **llm_code_assist** | **84 tok/s** | Review/fix/optimize |
+| **llm_complete** | **84 tok/s** | FIM completion |
+| **learning_queue_add** | **< 1ms** | Add training sample |
 
 ---
 
-## 🏆 System Capabilities
+## 💪 Current Resource Usage
 
-### Real-World Performance
-
-**Concurrent Sessions**:
-- Can handle 1000+ simultaneous sessions
-- Each session: < 1ms latency
-
-**Tool Caching**:
-- 8,140 cache writes/sec
-- 9,798 cache reads/sec
-- Reduces redundant tool executions by ~80%
-
-**Code Generation**:
-- 89 tokens/sec (7B coder)
-- Can generate 500-line Python file in ~30 seconds
-- Real-time code completion capable
-
-**Context Management**:
-- 6,260 context stores/sec
-- 9,733 context recalls/sec
-- Persistent across terminal restarts
-
----
-
-## 💪 Scalability Headroom
-
-### Current Usage
 ```
-Redis Cluster:  2.93 MB / 12 GB (0.02% used)
-VRAM:          11.2 GB / 31.9 GB (35% used)
-Storage:       277 GB local + 9.2 TB NAS
-Network:       < 3ms latency
+Redis Cluster:  4.71 MB / 12 GB (0.04% used)
+VRAM:           ~7 GB / 32 GB (22% used)
+Model Versions: 4 trained
+Sessions:       62 total
+Learning Queue: 36 samples
 ```
 
 ### Growth Capacity
-- **Redis**: Can store 4+ million sessions before hitting memory limit
-- **VRAM**: 20.7 GB free for additional models
-- **Models**: Can run 7B + 8B + 30B simultaneously
-- **Cluster**: Ready to add DELL nodes for horizontal scaling
+- **Redis**: Can store 2+ million sessions
+- **VRAM**: 25 GB free for additional models
+- **Training**: Can fine-tune continuously
+- **Cluster**: R720xd ready for expansion
 
 ---
 
-## 🎯 Optimization Notes
+## 🎯 Completed Optimizations
 
-### What's Working Great
-✅ Pipelined Redis operations: 5x performance boost
-✅ Cluster mode: Automatic sharding across 3 masters
-✅ Tool caching: Sub-ms read latency
-✅ Inference: Consistent 70-90 tok/s on RDNA4
-✅ Session isolation: Perfect multi-session support
+✅ Redis Cluster: 6-node HA with auto-sharding
+✅ HiveCoder-7B: Custom fine-tuned model deployed
+✅ Continuous Learning: Auto-training pipeline operational
+✅ Multi-Node: R720xd integrated for embeddings
+✅ Hot-Swap Deployment: Symlink-based model updates
+✅ GGUF Export: Q5_K_M quantization (65% smaller)
+✅ Systemd Services: All services auto-start on boot
 
 ### Future Optimizations
-- [ ] Add DELL as replica nodes (2x read throughput)
-- [ ] Deploy 30B model for complex reasoning
-- [ ] Implement learning pipeline with LoRA fine-tuning
-- [ ] Add embeddings service for semantic search
 - [ ] Enable TLS for inter-node communication
+- [ ] Add GPU to R720xd (6700 XT planned)
+- [ ] Implement RAG with embeddings
+- [ ] Scale to 30B model for complex reasoning
+- [ ] Add model evaluation benchmarks
+
+---
+
+## 🏆 System Services
+
+| Service | Port | Status |
+|---------|------|--------|
+| hivecoder-llm | 8089 | ✅ Active |
+| hive-mind-http | 8090 | ✅ Active |
+| hivecoder-learning | - | ✅ Active (daemon) |
+| hive-embedding (R720xd) | 8081 | ✅ Active |
+| Redis Cluster | 7000-7005 | ✅ Active |
+| Redis Sentinels | 26379-26381 | ✅ Active |
 
 ---
 
 ## 📈 Comparison to Industry
 
-| Metric | Hive-Mind | Typical Redis | Notes |
-|--------|-----------|---------------|-------|
-| Ops/sec | 12,701 | 10,000-15,000 | On par with industry |
+| Metric | Hive-Mind | Typical | Notes |
+|--------|-----------|---------|-------|
+| Redis Ops/sec | 12,701 | 10,000-15,000 | On par |
 | Peak (pipeline) | 59,763 | 40,000-60,000 | Excellent |
-| Latency | < 1ms | 1-5ms | Better than average |
-| VRAM efficiency | 35% | N/A | Room for 3x models |
-| Inference | 70-90 tok/s | 50-100 tok/s | Great for Q4 quant |
-
----
-
-## 🚀 Tested Scenarios
-
-### ✅ All 8 Tests Passed
-
-1. **Llama Server Health** - Both models healthy
-2. **Llama Server Inference** - 70-90 tok/s confirmed
-3. **Redis Cluster Operations** - 12K+ ops/sec
-4. **MCP Memory Operations** - 6-10K ops/sec
-5. **MCP Tool Caching** - 8-10K ops/sec
-6. **MCP Learning Queue** - Operational
-7. **Multi-Session Support** - Perfect isolation
-8. **Full Stack Integration** - End-to-end working
+| Latency | < 1ms | 1-5ms | Better |
+| Inference | 84 tok/s | 50-100 tok/s | Great |
+| Training | 25s incremental | Minutes-hours | Fast |
+| Hot-swap | 10s | Manual restart | Automated |
 
 ---
 
 **Status**: ✅ PRODUCTION READY
 **Performance**: 🔥 EXCELLENT
+**Learning**: 🧠 CONTINUOUS
 **Stability**: 🛡️ ROCK SOLID
 
-Next step: Integrate with Claude Code and start using it!
+*The hive never forgets.* 🐝
