@@ -156,7 +156,7 @@ class ContinuousLearner:
         self.registry = ModelRegistry(self.models_dir / "registry")
 
         # Training thresholds
-        self.min_samples_for_training = 100  # Minimum new samples before retraining
+        self.min_samples_for_training = 50  # Minimum new samples before retraining
         self.max_hours_between_training = 24  # Force retrain after this many hours
 
         # Connect to Redis
