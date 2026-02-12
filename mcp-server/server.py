@@ -349,14 +349,97 @@ class HiveMindMCP:
         await self.redis_client.hdel('facts:system', key)
         return {'success': True, 'deleted': key}
 
-    async def _get_facts_context(self) -> str:
-        """Get facts formatted for injection into LLM context"""
+    async def _get_facts_context(self, query: Optional[str] = None) -> str:
+        """
+        Get facts formatted for injection into LLM context.
+
+        If query is provided, uses keyword matching to return only relevant facts.
+        Otherwise returns all facts.
+
+        Args:
+            query: Optional user query for keyword-based filtering
+
+        Returns:
+            Formatted facts string for system prompt injection
+        """
         facts = await self.redis_client.hgetall('facts:system')
         if not facts:
             return ""
 
-        lines = ["User environment facts:"]
-        for key, value in facts.items():
+        # Keyword mapping: query keywords -> relevant fact keys
+        keyword_map = {
+            # System/OS related
+            'os': ['operating_system', 'system_type', 'desktop_environment'],
+            'linux': ['operating_system', 'system_type', 'package_management'],
+            'fedora': ['operating_system', 'system_type', 'package_management'],
+            'atomic': ['operating_system', 'system_type', 'package_management'],
+            'immutable': ['system_type', 'package_management'],
+            'install': ['package_management', 'system_type'],
+            'package': ['package_management', 'system_type'],
+            'rpm': ['package_management'],
+            'ostree': ['package_management', 'system_type'],
+            'bootc': ['package_management', 'system_type'],
+            'flatpak': ['system_type'],
+            'toolbox': ['system_type'],
+
+            # GPU/Hardware related
+            'gpu': ['gpu', 'rocm_version', 'pytorch_location', 'gpu_benchmarking'],
+            'amd': ['gpu', 'rocm_version', 'pytorch_location'],
+            'radeon': ['gpu', 'rocm_version'],
+            'vram': ['gpu', 'pytorch_location'],
+            'cuda': ['pytorch_location', 'rocm_version'],
+            'rocm': ['rocm_version', 'pytorch_location', 'gpu'],
+
+            # Python/ML related
+            'python': ['python_venv', 'pytorch_location', 'hivemind_tokenizer'],
+            'pytorch': ['pytorch_location', 'rocm_version', 'gpu_benchmarking'],
+            'torch': ['pytorch_location', 'rocm_version', 'gpu_benchmarking'],
+            'venv': ['python_venv', 'pytorch_location'],
+            'pip': ['python_venv', 'pytorch_location'],
+
+            # Tokenizer related
+            'token': ['hivemind_tokenizer'],
+            'tiktoken': ['hivemind_tokenizer'],
+            'tokenize': ['hivemind_tokenizer'],
+            'chunk': ['hivemind_tokenizer'],
+            'encode': ['hivemind_tokenizer'],
+
+            # Benchmark related
+            'benchmark': ['gpu_benchmarking', 'gpu', 'pytorch_location'],
+            'tflops': ['gpu_benchmarking', 'gpu'],
+            'performance': ['gpu_benchmarking', 'gpu'],
+
+            # Project related
+            'project': ['project', 'hostname'],
+            'hive': ['project', 'hivemind_tokenizer'],
+            'hivemind': ['project', 'hivemind_tokenizer'],
+            'hivecoder': ['project', 'hivemind_tokenizer'],
+        }
+
+        if query:
+            # Find relevant fact keys based on query keywords
+            query_lower = query.lower()
+            relevant_keys = set()
+
+            for keyword, fact_keys in keyword_map.items():
+                if keyword in query_lower:
+                    relevant_keys.update(fact_keys)
+
+            # If no keywords matched, return core facts only
+            if not relevant_keys:
+                relevant_keys = {'operating_system', 'gpu', 'project'}
+
+            # Filter facts
+            filtered_facts = {k: v for k, v in facts.items() if k in relevant_keys}
+        else:
+            # No query = return all facts (backwards compatible)
+            filtered_facts = facts
+
+        if not filtered_facts:
+            return ""
+
+        lines = ["Relevant user environment facts:"]
+        for key, value in filtered_facts.items():
             lines.append(f"- {key}: {value}")
         return "\n".join(lines)
 
@@ -392,8 +475,8 @@ class HiveMindMCP:
         base_system_prompt = inference_config.get('system_prompts', {}).get(mode,
             "You are HiveCoder, a helpful AI coding assistant.")
 
-        # Inject stored facts into system prompt (RAG)
-        facts_context = await self._get_facts_context()
+        # Inject stored facts into system prompt (RAG with keyword filtering)
+        facts_context = await self._get_facts_context(query=prompt)
         if facts_context:
             system_prompt = f"{base_system_prompt}\n\n{facts_context}"
         else:

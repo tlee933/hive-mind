@@ -404,8 +404,15 @@ async def openai_chat_completions(request: ChatCompletionRequest):
         raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
 
     try:
-        # Get RAG facts
-        facts_context = await hive_mind._get_facts_context()
+        # Extract user query for keyword-based fact filtering
+        user_query = None
+        for msg in reversed(request.messages):
+            if msg.role == "user":
+                user_query = msg.content
+                break
+
+        # Get RAG facts (filtered by keywords in query)
+        facts_context = await hive_mind._get_facts_context(query=user_query)
 
         # Process messages - inject facts into system prompt
         messages = []
