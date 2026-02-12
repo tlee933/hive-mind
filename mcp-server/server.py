@@ -316,6 +316,50 @@ class HiveMindMCP:
             'llm_status': llm_status,
         }
 
+    # ========== Fact Storage (RAG) Methods ==========
+
+    async def fact_store(self, key: str, value: str) -> Dict[str, Any]:
+        """
+        Store a fact for RAG retrieval
+
+        Args:
+            key: Fact key/question (e.g., "operating_system", "gpu")
+            value: Fact value/answer (e.g., "Fedora 43 Kinoite", "AMD R9700")
+        """
+        await self.redis_client.hset('facts:system', key, value)
+        logger.info(f"Stored fact: {key} = {value}")
+        return {'success': True, 'key': key, 'value': value}
+
+    async def fact_get(self, key: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Retrieve facts for RAG
+
+        Args:
+            key: Specific fact key, or None for all facts
+        """
+        if key:
+            value = await self.redis_client.hget('facts:system', key)
+            return {'success': True, 'key': key, 'value': value}
+        else:
+            facts = await self.redis_client.hgetall('facts:system')
+            return {'success': True, 'facts': facts}
+
+    async def fact_delete(self, key: str) -> Dict[str, Any]:
+        """Delete a stored fact"""
+        await self.redis_client.hdel('facts:system', key)
+        return {'success': True, 'deleted': key}
+
+    async def _get_facts_context(self) -> str:
+        """Get facts formatted for injection into LLM context"""
+        facts = await self.redis_client.hgetall('facts:system')
+        if not facts:
+            return ""
+
+        lines = ["User environment facts:"]
+        for key, value in facts.items():
+            lines.append(f"- {key}: {value}")
+        return "\n".join(lines)
+
     # ========== LLM Inference Methods ==========
 
     async def llm_generate(self, prompt: str, mode: str = "code",
@@ -344,9 +388,16 @@ class HiveMindMCP:
                 logger.info(f"LLM cache HIT for prompt: {prompt[:50]}...")
                 return json.loads(cached)
 
-        # Build request
-        system_prompt = inference_config.get('system_prompts', {}).get(mode,
+        # Build request with RAG facts injection
+        base_system_prompt = inference_config.get('system_prompts', {}).get(mode,
             "You are HiveCoder, a helpful AI coding assistant.")
+
+        # Inject stored facts into system prompt (RAG)
+        facts_context = await self._get_facts_context()
+        if facts_context:
+            system_prompt = f"{base_system_prompt}\n\n{facts_context}"
+        else:
+            system_prompt = base_system_prompt
 
         payload = {
             "model": inference_config.get('model', 'HiveCoder-7B'),
@@ -669,6 +720,51 @@ async def main():
                     },
                     "required": ["prefix"]
                 }
+            ),
+            Tool(
+                name="fact_store",
+                description="Store a fact for RAG retrieval. Facts are injected into LLM context automatically.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Fact key (e.g., 'operating_system', 'gpu', 'desktop_environment')"
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Fact value (e.g., 'Fedora 43 Kinoite', 'AMD R9700 32GB')"
+                        }
+                    },
+                    "required": ["key", "value"]
+                }
+            ),
+            Tool(
+                name="fact_get",
+                description="Retrieve stored facts. Get a specific fact by key or all facts if no key provided.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Specific fact key to retrieve (optional, omit for all facts)"
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="fact_delete",
+                description="Delete a stored fact by key.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Fact key to delete"
+                        }
+                    },
+                    "required": ["key"]
+                }
             )
         ]
 
@@ -730,6 +826,19 @@ async def main():
                     prefix=arguments["prefix"],
                     suffix=arguments.get("suffix", ""),
                     max_tokens=arguments.get("max_tokens", 256)
+                )
+            elif name == "fact_store":
+                result = await hive_mind.fact_store(
+                    key=arguments["key"],
+                    value=arguments["value"]
+                )
+            elif name == "fact_get":
+                result = await hive_mind.fact_get(
+                    key=arguments.get("key")
+                )
+            elif name == "fact_delete":
+                result = await hive_mind.fact_delete(
+                    key=arguments["key"]
                 )
             else:
                 result = {"error": f"Unknown tool: {name}"}

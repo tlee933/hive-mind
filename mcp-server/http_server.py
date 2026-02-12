@@ -69,6 +69,21 @@ class LLMCompleteRequest(BaseModel):
     suffix: str = ""
     max_tokens: int = 256
 
+
+# Fact storage request models (RAG)
+class FactStoreRequest(BaseModel):
+    key: str
+    value: str
+
+
+class FactGetRequest(BaseModel):
+    key: Optional[str] = None
+
+
+class FactDeleteRequest(BaseModel):
+    key: str
+
+
 # Create FastAPI app
 app = FastAPI(
     title="Hive-Mind HTTP API",
@@ -167,6 +182,48 @@ async def memory_list_sessions(request: MemoryListSessionsRequest):
         return result
     except Exception as e:
         logger.error(f"Error in memory_list_sessions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/fact/store")
+async def fact_store(request: FactStoreRequest):
+    """Store a fact for RAG retrieval"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        result = await hive_mind.fact_store(key=request.key, value=request.value)
+        return result
+    except Exception as e:
+        logger.error(f"Error in fact_store: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/fact/get")
+async def fact_get(request: FactGetRequest):
+    """Get stored facts"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        result = await hive_mind.fact_get(key=request.key)
+        return result
+    except Exception as e:
+        logger.error(f"Error in fact_get: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/fact/delete")
+async def fact_delete(request: FactDeleteRequest):
+    """Delete a stored fact"""
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        result = await hive_mind.fact_delete(key=request.key)
+        return result
+    except Exception as e:
+        logger.error(f"Error in fact_delete: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

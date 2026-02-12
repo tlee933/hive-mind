@@ -122,6 +122,12 @@ class QualityFilter:
         filtered = []
 
         for item in interactions:
+            # Facts always pass (they're explicitly taught)
+            if item.get('type') == 'fact':
+                if item.get('question') and item.get('answer'):
+                    filtered.append(item)
+                continue
+
             # Must be successful
             if not item.get('success', True):
                 continue
@@ -224,15 +230,27 @@ class ContinuousLearner:
                     if msg_id in collected_ids:
                         continue
 
-                    interaction = {
-                        'id': msg_id,
-                        'timestamp': msg_data.get('timestamp', ''),
-                        'tool': msg_data.get('tool_used') or msg_data.get('tool', ''),
-                        'input': msg_data.get('user_query') or msg_data.get('input', ''),
-                        'output': msg_data.get('result') or msg_data.get('output', ''),
-                        'success': str(msg_data.get('success', 'true')).lower() in ('true', '1', 'yes'),
-                        'session_id': msg_data.get('session_id', ''),
-                    }
+                    # Handle fact-type entries
+                    if msg_data.get('type') == 'fact':
+                        interaction = {
+                            'id': msg_id,
+                            'type': 'fact',
+                            'question': msg_data.get('question', ''),
+                            'answer': msg_data.get('answer', ''),
+                            'timestamp': msg_data.get('timestamp', ''),
+                            'session_id': msg_data.get('session_id', ''),
+                        }
+                    else:
+                        # Standard interaction
+                        interaction = {
+                            'id': msg_id,
+                            'timestamp': msg_data.get('timestamp', ''),
+                            'tool': msg_data.get('tool_used') or msg_data.get('tool', ''),
+                            'input': msg_data.get('user_query') or msg_data.get('input', ''),
+                            'output': msg_data.get('result') or msg_data.get('output', ''),
+                            'success': str(msg_data.get('success', 'true')).lower() in ('true', '1', 'yes'),
+                            'session_id': msg_data.get('session_id', ''),
+                        }
                     new_interactions.append(interaction)
                     new_ids.append(msg_id)
 
@@ -251,6 +269,22 @@ class ContinuousLearner:
         training_data = []
 
         for item in interactions:
+            # Handle fact-type entries (Q&A pairs for context learning)
+            if item.get('type') == 'fact':
+                question = item.get('question', '')
+                answer = item.get('answer', '')
+                if question and answer:
+                    example = {
+                        'type': 'fact',
+                        'user_request': question,
+                        'output': answer,
+                        'tool': 'context_recall',
+                        'command': '',
+                        'timestamp': item.get('timestamp', ''),
+                    }
+                    training_data.append(example)
+                continue
+
             if not item.get('success', True):
                 continue
 

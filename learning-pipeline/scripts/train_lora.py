@@ -188,11 +188,17 @@ class LoRATrainer:
         def format_instruction(example):
             """Format example as instruction-following for system interactions"""
             user_request = example['user_request']
-            command = example.get('command', '')
             output = example.get('output', '')
-            tool = example.get('tool', 'bash')
+            example_type = example.get('type', 'interaction')
 
-            # Format as a system interaction
+            # Format facts as simple Q&A (for context recall)
+            if example_type == 'fact':
+                full_text = f"### Question:\n{user_request}\n\n### Answer:\n{output}"
+                return {'text': full_text}
+
+            # Format tool interactions
+            command = example.get('command', '')
+            tool = example.get('tool', 'bash')
             prompt = f"### User Request:\n{user_request}\n\n### Tool: {tool}\n### Command:\n{command}\n\n### Output:\n"
             full_text = prompt + output
 
