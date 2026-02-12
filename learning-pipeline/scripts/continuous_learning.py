@@ -465,6 +465,8 @@ class ContinuousLearner:
                 gguf_files = list(export_dir.glob("*.gguf"))
                 if gguf_files:
                     version.gguf_path = str(gguf_files[0])
+
+            if version.gguf_path:
                 self.registry._save()
                 logger.info(f"Exported to: {version.gguf_path}")
                 return True
