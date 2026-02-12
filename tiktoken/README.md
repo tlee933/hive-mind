@@ -53,6 +53,17 @@ count = tokenizer.count_tokens("Your text here")
 chunks = tokenizer.chunk_text(long_text, chunk_size=512, overlap=50)
 ```
 
+## Benchmark
+
+tiktoken (Rust) vs HuggingFace tokenizer (Python):
+
+| Text Size | tiktoken | HuggingFace | Speedup |
+|-----------|----------|-------------|---------|
+| Medium (900 chars) | 31,000/sec | 4,800/sec | **6.4x** |
+| Long (8.6K chars) | 3,400/sec | 574/sec | **6.0x** |
+
+For real workloads (RAG chunks, prompts, documents), tiktoken is **6x faster**.
+
 ## Why?
 
 Python 3.14 is bleeding edge - tiktoken doesn't have official wheels yet.

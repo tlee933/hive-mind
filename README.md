@@ -164,8 +164,13 @@ See [`learning-pipeline/TRAINING_RESULTS.md`](learning-pipeline/TRAINING_RESULTS
 ### ⚡ Fast Tokenization (NEW!)
 - **tiktoken 0.12.0**: Pre-built wheel for Python 3.14
 - **Custom Encodings**: `hivecoder` encoding for local models
-- **~10x Faster**: Rust-based tokenizer vs Python
+- **6x Faster**: Rust-based tokenizer vs HuggingFace Python
 - **hivemind_client.tokenizer**: Token counting, chunking, truncation
+
+| Text Size | tiktoken (Rust) | HuggingFace | Speedup |
+|-----------|-----------------|-------------|---------|
+| Medium (900 chars) | 31,000/sec | 4,800/sec | **6.4x** |
+| Long (8.6K chars) | 3,400/sec | 574/sec | **6.0x** |
 
 ### 💾 Distributed Memory
 - **Persistent Sessions**: Context survives terminal restarts
