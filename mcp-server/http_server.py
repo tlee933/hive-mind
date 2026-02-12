@@ -5,6 +5,7 @@ Provides REST API access to the same distributed memory system
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -12,7 +13,9 @@ from typing import Optional, List, Dict, Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import aiohttp
 
 # Import the existing HiveMindMCP class
 from server import HiveMindMCP
@@ -397,8 +400,6 @@ async def openai_chat_completions(request: ChatCompletionRequest):
     Use this endpoint instead of llama-server directly to get
     automatic RAG fact injection into the system prompt.
     """
-    import aiohttp
-
     if not hive_mind:
         raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
 
@@ -439,18 +440,45 @@ async def openai_chat_completions(request: ChatCompletionRequest):
             "stream": request.stream
         }
 
-        timeout = aiohttp.ClientTimeout(total=inference_config.get('timeout', 60))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{endpoint}/v1/chat/completions",
-                json=payload
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise HTTPException(status_code=resp.status, detail=error_text)
+        timeout = aiohttp.ClientTimeout(total=inference_config.get('timeout', 120))
 
-                # Return response as-is (OpenAI-compatible format)
-                return await resp.json()
+        # Handle streaming vs non-streaming
+        if request.stream:
+            # Streaming response - proxy the SSE stream
+            async def stream_generator():
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        f"{endpoint}/v1/chat/completions",
+                        json=payload
+                    ) as resp:
+                        if resp.status != 200:
+                            error_text = await resp.text()
+                            yield f"data: {json.dumps({'error': error_text})}\n\n"
+                            return
+                        async for chunk in resp.content.iter_any():
+                            yield chunk
+
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                }
+            )
+        else:
+            # Non-streaming response
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{endpoint}/v1/chat/completions",
+                    json=payload
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        raise HTTPException(status_code=resp.status, detail=error_text)
+
+                    # Return response as-is (OpenAI-compatible format)
+                    return await resp.json()
 
     except aiohttp.ClientError as e:
         logger.error(f"Error connecting to LLM backend: {e}")
