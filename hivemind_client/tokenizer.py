@@ -145,3 +145,4 @@ def estimate_context_usage(
 count = count_tokens
 enc = encode
 dec = decode
+tokenize = encode  # Common alias
