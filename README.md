@@ -152,13 +152,20 @@ See [`learning-pipeline/TRAINING_RESULTS.md`](learning-pipeline/TRAINING_RESULTS
 
 ## 🎯 Features
 
-### 🔌 Dual-Mode Access (NEW!)
+### 🔌 Dual-Mode Access
 - **HTTP API (Port 8090)**: RESTful access for Open Interpreter, scripts, any tool
 - **MCP Protocol (stdio)**: Native integration for Claude Code
+- **OpenAI-Compatible Proxy**: `/v1/chat/completions` with RAG injection
 - **Cross-Tool Sharing**: Context stored via HTTP is accessible via MCP and vice versa
 - **Systemd Service**: HTTP API auto-starts on boot
-- **Python Client**: Easy integration with `hivemind_client.py`
+- **Python Client**: Easy integration with `hivemind_client`
 - **Interactive Docs**: Auto-generated Swagger UI at `/docs`
+
+### ⚡ Fast Tokenization (NEW!)
+- **tiktoken 0.12.0**: Pre-built wheel for Python 3.14
+- **Custom Encodings**: `hivecoder` encoding for local models
+- **~10x Faster**: Rust-based tokenizer vs Python
+- **hivemind_client.tokenizer**: Token counting, chunking, truncation
 
 ### 💾 Distributed Memory
 - **Persistent Sessions**: Context survives terminal restarts
@@ -269,6 +276,11 @@ print(context['context'])
 # Get stats
 stats = hive.get_stats()
 print(f"Total sessions: {stats['total_sessions']}")
+
+# Fast tokenization
+from hivemind_client import tokenizer
+count = tokenizer.count_tokens("Your text here")
+chunks = tokenizer.chunk_text(long_text, chunk_size=512, overlap=50)
 ```
 
 **Service Management**:
@@ -324,6 +336,7 @@ Open Interpreter → HTTP API → Redis ← MCP Protocol ← Claude Code
 | [MCP_SERVER_READY.md](MCP_SERVER_READY.md) | Claude Code MCP integration |
 | [CLUSTER_STATUS.md](CLUSTER_STATUS.md) | Redis cluster operations manual |
 | [PERFORMANCE.md](PERFORMANCE.md) | Detailed benchmark results |
+| [tiktoken/README.md](tiktoken/README.md) | **tiktoken for Python 3.14 + custom encodings (NEW!)** |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Deep dive into system design |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment guide |
 

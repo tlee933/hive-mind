@@ -423,6 +423,56 @@ sudo journalctl -u hivecoder-learning -f
 
 ---
 
+## RAG + Fast Tokenization (February 12, 2026)
+
+### The Challenge
+
+Open Interpreter bypassed Hive-Mind's RAG layer - going directly to llama-server without context injection. HiveCoder didn't know user facts (OS, GPU, etc.).
+
+### The Solution
+
+**OpenAI-Compatible RAG Proxy:**
+```
+Open Interpreter → litellm → hive-mind-http:8090 → llama-server:8089
+                                    ↓
+                           RAG facts injected
+```
+
+Added `/v1/chat/completions` endpoint that:
+- Injects Redis facts into system prompt
+- Handles streaming responses
+- Maintains OpenAI API compatibility
+
+**tiktoken for Python 3.14:**
+- Built tiktoken 0.12.0 from source (no official py314 wheels)
+- Created custom `hivecoder` encoding
+- Added `hivemind_client.tokenizer` module (~10x faster than Python tokenizers)
+
+```python
+from hivemind_client import tokenizer
+
+# Fast token counting
+count = tokenizer.count_tokens("Your text")
+
+# Chunking for embeddings
+chunks = tokenizer.chunk_text(long_text, chunk_size=512, overlap=50)
+```
+
+### Canonical AI Venv
+
+Consolidated all AI tools into single venv:
+```
+/var/mnt/build/.venv → TheRock/.venv
+├── ROCm PyTorch 2.9.1
+├── open-interpreter
+├── hivemind_client
+└── tiktoken 0.12.0
+```
+
+Bashrc: `$AI_VENV`, `activate-ai`, `oih`
+
+---
+
 ## The Model
 
 **HiveCoder-7B** - hashcat's first foundation model

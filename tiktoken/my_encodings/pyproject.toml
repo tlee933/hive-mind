@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-tiktoken-encodings"
+version = "0.1.0"
+description = "Custom tiktoken encodings for HiveCoder and local models"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["tiktoken"]
+
+[project.entry-points."tiktoken_ext"]
+my_encodings = "tiktoken_ext.my_encodings:ENCODING_CONSTRUCTORS"
+
+[tool.setuptools.packages.find]
+include = ["tiktoken_ext*"]
