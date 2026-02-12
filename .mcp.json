@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "hive-mind": {
+      "command": "/var/mnt/build/MCP/hive-mind/.venv/bin/python",
+      "args": [
+        "/var/mnt/build/MCP/hive-mind/mcp-server/server.py"
+      ],
+      "env": {
+        "CONFIG_PATH": "/var/mnt/build/MCP/hive-mind/config.yaml",
+        "PYTHONPATH": "/var/mnt/build/MCP/hive-mind/mcp-server"
+      }
+    }
+  }
+}

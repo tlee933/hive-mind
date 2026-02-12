@@ -375,6 +375,107 @@ async def llm_status():
     }
 
 
+# ========== OpenAI-Compatible Proxy with RAG ==========
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str = "HiveCoder-7B"
+    messages: List[ChatMessage]
+    max_tokens: Optional[int] = 512
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 0.9
+    stream: Optional[bool] = False
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(request: ChatCompletionRequest):
+    """
+    OpenAI-compatible chat completions endpoint with RAG injection.
+
+    Use this endpoint instead of llama-server directly to get
+    automatic RAG fact injection into the system prompt.
+    """
+    import aiohttp
+
+    if not hive_mind:
+        raise HTTPException(status_code=503, detail="Hive-Mind not initialized")
+
+    try:
+        # Get RAG facts
+        facts_context = await hive_mind._get_facts_context()
+
+        # Process messages - inject facts into system prompt
+        messages = []
+        system_found = False
+
+        for msg in request.messages:
+            if msg.role == "system" and facts_context:
+                # Inject facts into existing system prompt
+                enhanced_content = f"{msg.content}\n\n{facts_context}"
+                messages.append({"role": "system", "content": enhanced_content})
+                system_found = True
+            else:
+                messages.append({"role": msg.role, "content": msg.content})
+
+        # If no system message, prepend one with facts
+        if not system_found and facts_context:
+            messages.insert(0, {
+                "role": "system",
+                "content": f"You are HiveCoder, a helpful AI coding assistant.\n\n{facts_context}"
+            })
+
+        # Forward to llama-server
+        inference_config = hive_mind.config.get('inference', {})
+        endpoint = inference_config.get('endpoint', 'http://127.0.0.1:8089')
+
+        payload = {
+            "model": request.model,
+            "messages": messages,
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "stream": request.stream
+        }
+
+        timeout = aiohttp.ClientTimeout(total=inference_config.get('timeout', 60))
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{endpoint}/v1/chat/completions",
+                json=payload
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise HTTPException(status_code=resp.status, detail=error_text)
+
+                # Return response as-is (OpenAI-compatible format)
+                return await resp.json()
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Error connecting to LLM backend: {e}")
+        raise HTTPException(status_code=502, detail=f"LLM backend error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in chat completions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/models")
+async def openai_list_models():
+    """OpenAI-compatible models endpoint"""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "HiveCoder-7B",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "hive-mind"
+            }
+        ]
+    }
+
+
 def main():
     """Start the HTTP server"""
     host = os.environ.get('HTTP_HOST', '0.0.0.0')
