@@ -381,6 +381,10 @@ class HiveMindMCP:
             'bootc': ['package_management', 'system_type'],
             'flatpak': ['system_type'],
             'toolbox': ['system_type'],
+            'container': ['system_type', 'package_management'],
+            'podman': ['system_type', 'package_management'],
+            'docker': ['system_type', 'package_management'],
+            'quadlet': ['system_type'],
 
             # GPU/Hardware related
             'gpu': ['gpu', 'rocm_version', 'pytorch_location', 'gpu_benchmarking'],
