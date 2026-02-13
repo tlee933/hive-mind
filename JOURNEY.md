@@ -443,10 +443,33 @@ Added `/v1/chat/completions` endpoint that:
 - Handles streaming responses
 - Maintains OpenAI API compatibility
 
+**Keyword-Based RAG Filtering:**
+
+Selective fact injection based on query keywords reduces token overhead:
+
+| Query Keywords | Injected Facts |
+|----------------|----------------|
+| `gpu`, `amd`, `vram` | gpu, rocm_version, pytorch_location |
+| `install`, `package`, `rpm` | package_management, system_type |
+| `os`, `linux`, `fedora` | operating_system, desktop_environment |
+| `python`, `venv`, `pip` | python_venv, pytorch_location |
+| `token`, `chunk`, `encode` | hivemind_tokenizer |
+
+Unmatched queries get core facts only (os, gpu, project) → ~84 tokens vs ~250+ for all facts.
+
+**Test Results:**
+```
+Q: "What GPU do I have?"
+A: "AMD Radeon AI PRO R9700 with 32GB VRAM" ✓
+
+Q: "How do I install htop?"
+A: "sudo rpm-ostree install htop" ✓ (Fedora Atomic aware!)
+```
+
 **tiktoken for Python 3.14:**
 - Built tiktoken 0.12.0 from source (no official py314 wheels)
 - Created custom `hivecoder` encoding
-- Added `hivemind_client.tokenizer` module (~10x faster than Python tokenizers)
+- Added `hivemind_client.tokenizer` module
 
 ```python
 from hivemind_client import tokenizer
@@ -457,6 +480,12 @@ count = tokenizer.count_tokens("Your text")
 # Chunking for embeddings
 chunks = tokenizer.chunk_text(long_text, chunk_size=512, overlap=50)
 ```
+
+**Benchmark (tiktoken vs HuggingFace):**
+| Text Size | tiktoken | HuggingFace | Speedup |
+|-----------|----------|-------------|---------|
+| Medium (900 chars) | 31,000/sec | 4,800/sec | **6.4x** |
+| Long (8.6K chars) | 3,400/sec | 574/sec | **6.0x** |
 
 ### Canonical AI Venv
 
@@ -470,6 +499,11 @@ Consolidated all AI tools into single venv:
 ```
 
 Bashrc: `$AI_VENV`, `activate-ai`, `oih`
+
+### Future: Semantic Search
+
+Keyword matching works well but misses synonyms ("graphics card" vs "gpu").
+See [ROADMAP.md](ROADMAP.md) for semantic search plans using embedding models.
 
 ---
 
@@ -501,7 +535,7 @@ Built with:
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 9, 2026
+**Date**: February 12, 2026
 **Author**: hashcat
 
 ---
