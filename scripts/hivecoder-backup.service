@@ -1,0 +1,11 @@
+[Unit]
+Description=HiveCoder Model Backup to NAS
+After=network.target
+
+[Service]
+Type=oneshot
+User=hashcat
+ExecStart=/bin/bash /var/mnt/build/MCP/hive-mind/scripts/backup-to-nas.sh
+
+[Install]
+WantedBy=multi-user.target

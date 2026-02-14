@@ -164,13 +164,15 @@ class ContinuousLearner:
         # Training thresholds
         self.min_samples_for_training = 50  # Minimum new samples before retraining
         self.max_hours_between_training = 24  # Force retrain after this many hours
+        self.keep_old_versions = 1  # Keep N old versions beyond current deployed
 
         # Connect to Redis
         self._connect_redis()
 
-        # Track last collection
+        # Track last collection and training
         self.last_collection_file = self.data_dir / ".last_collection"
         self.collected_ids_file = self.data_dir / ".collected_ids"
+        self.last_training_file = self.data_dir / ".last_training"
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -344,6 +346,31 @@ class ContinuousLearner:
         logger.info(f"Merged {len(unique_examples)} unique examples into {merged_file}")
         return merged_file
 
+    @staticmethod
+    def _to_naive(dt: datetime) -> datetime:
+        """Strip timezone info to make datetime naive (for comparison)"""
+        if dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+
+    def _get_last_training_time(self) -> Optional[datetime]:
+        """Get the time of the last training attempt (not just last deploy)"""
+        if self.last_training_file.exists():
+            try:
+                ts = self.last_training_file.read_text().strip()
+                return self._to_naive(datetime.fromisoformat(ts))
+            except (ValueError, OSError):
+                pass
+        # Fall back to deployed version time
+        deployed = self.registry.get_deployed()
+        if deployed:
+            return self._to_naive(datetime.fromisoformat(deployed.created_at))
+        return None
+
+    def _mark_training_started(self):
+        """Record that a training attempt was made"""
+        self.last_training_file.write_text(datetime.now().isoformat())
+
     def should_train(self) -> bool:
         """Check if we should trigger training"""
         # Count available training samples
@@ -356,20 +383,56 @@ class ContinuousLearner:
             logger.info(f"Training threshold met: {total_samples} >= {self.min_samples_for_training}")
             return True
 
-        # Check time since last training
-        last_version = self.registry.get_deployed()
-        if last_version:
-            last_time = datetime.fromisoformat(last_version.created_at)
+        # Check time since last training attempt (not just last deploy)
+        last_time = self._get_last_training_time()
+        if last_time:
             hours_since = (datetime.now() - last_time).total_seconds() / 3600
             if hours_since > self.max_hours_between_training and total_samples > 0:
                 logger.info(f"Time threshold met: {hours_since:.1f}h > {self.max_hours_between_training}h")
                 return True
+            elif total_samples > 0:
+                logger.info(f"Too soon to retrain: {hours_since:.1f}h < {self.max_hours_between_training}h")
 
         logger.info(f"Training not needed: {total_samples} samples (need {self.min_samples_for_training})")
         return False
 
+    def cleanup_old_versions(self):
+        """Remove old model versions, keeping deployed + N previous"""
+        continuous_dir = self.models_dir / "continuous"
+        if not continuous_dir.exists():
+            return
+
+        deployed = self.registry.get_deployed()
+        deployed_version = deployed.version if deployed else None
+
+        # Get all version dirs sorted by name (which is by date)
+        version_dirs = sorted(continuous_dir.iterdir(), reverse=True)
+
+        # Identify which to keep: deployed + newest N others
+        keep = set()
+        if deployed_version:
+            keep.add(deployed_version)
+
+        kept_others = 0
+        for d in version_dirs:
+            if d.name == deployed_version:
+                continue
+            if kept_others < self.keep_old_versions:
+                keep.add(d.name)
+                kept_others += 1
+
+        # Remove the rest
+        for d in version_dirs:
+            if d.name not in keep and d.is_dir():
+                size_mb = sum(f.stat().st_size for f in d.rglob('*') if f.is_file()) / (1024 * 1024)
+                logger.info(f"Cleaning up old version: {d.name} ({size_mb:.0f}MB)")
+                shutil.rmtree(d)
+
     def train_new_version(self) -> Optional[ModelVersion]:
         """Train a new model version"""
+        # Mark training started to prevent re-triggering
+        self._mark_training_started()
+
         # Merge all training data
         training_file = self.merge_training_data()
 
@@ -580,6 +643,8 @@ class ContinuousLearner:
                 if self.export_to_gguf(version):
                     # 6. Deploy
                     self.deploy_version(version)
+                    # 7. Cleanup old versions
+                    self.cleanup_old_versions()
 
         logger.info("Cycle complete")
 

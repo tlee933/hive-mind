@@ -527,15 +527,42 @@ Ready for:
 
 ---
 
+## Day 15: The Brew Upgrade Incident (Feb 13, 2026)
+
+Upgraded Homebrew which pulled llama.cpp b8020 and Claude Code Opus 4.6. The new `convert_hf_to_gguf.py` referenced `MODEL_ARCH.QWEN35` which didn't exist in the released `gguf` pip package (0.17.1). Fix: installed gguf directly from llama.cpp git master.
+
+### What Broke
+- GGUF export failed mid-pipeline, learning daemon kept re-triggering training (4 runs in one day)
+- Root cause: `should_train()` checked time since last *deployed* version, not last *training attempt*
+- Each failed export left the deployed version stale, so the 24h threshold kept firing
+
+### What We Fixed
+1. **gguf package** - installed from llama.cpp master to match brew's converter
+2. **Training frequency** - added `.last_training` marker file to track attempts, not just deploys
+3. **Auto-cleanup** - `cleanup_old_versions()` removes stale model versions after deploy (keeps deployed + 1 previous)
+4. **NAS backup timer** - systemd timer for Sun/Wed/Fri 3am, 3-copy rotation to `/var/mnt/ai/hive-mind/`
+5. **Disk recovery** - cleaned 4 stale versions, went from 73% to 56% usage (reclaimed ~60GB)
+
+### Performance
+- HiveCoder-7B v20260213: 92 tok/s generation, 597 tok/s prompt on R9700
+- Q5_K_M quantization: 5.44GB (64.3% smaller than f16)
+
+### Lessons Learned
+- Always pin or sync `gguf` pip package version with llama.cpp build
+- Track training *attempts* not just successful deploys to prevent runaway retraining
+- Auto-cleanup is essential when each model version is 15-35GB
+
+---
+
 ## Credits
 
 Built with:
-- 🧠 Claude Code (Opus 4.5)
+- 🧠 Claude Code (Opus 4.6)
 - ☕ A lot of coffee
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 12, 2026
+**Date**: February 13, 2026
 **Author**: hashcat
 
 ---
