@@ -604,6 +604,24 @@ The build script (`build_pytorch_gfx1201.sh`) is now fully self-contained:
 
 Checked upstream TheRock (67 commits since our Feb 6 build). No gfx1201-specific fixes. The LLVM compiler bump is the only potentially useful change. Verdict: skip for now, revisit when `therock-7.12` is tagged.
 
+### GGUF Export Fix (Round 2)
+
+The Day 15 `QWEN35` fix had regressed - the gguf package was back to PyPI 0.17.1 (missing `MODEL_ARCH.QWEN35`) after the PyTorch 2.10 `pip install --force-reinstall` pulled in fresh dependencies. Force-reinstalled gguf from llama.cpp b8020 git source and pinned it in `requirements.txt` so it won't regress again.
+
+### End-to-End Pipeline Verification
+
+Forced a training run with PyTorch 2.10 + fixed gguf:
+
+| Stage | Result | Time |
+|-------|--------|------|
+| Data collection | 31 samples merged | instant |
+| LoRA training | loss: 0.0000 | 26s |
+| GGUF export (f16 + Q5_K_M) | Success | ~3 min |
+| Deploy (llama-server hot-swap) | v20260214 live | 11s |
+| Auto-cleanup | 3 old versions removed (~21 GB) | instant |
+
+Full cycle: **~4 minutes** from data to deployed model.
+
 ---
 
 ## Credits
