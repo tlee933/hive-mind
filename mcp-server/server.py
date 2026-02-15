@@ -400,9 +400,14 @@ class HiveMindMCP:
 
             # Python/ML related
             'python': ['python_venv', 'pytorch_location', 'hivemind_tokenizer'],
-            'pytorch': ['pytorch_location', 'rocm_version', 'gpu_benchmarking'],
-            'torch': ['pytorch_location', 'rocm_version', 'gpu_benchmarking'],
+            'pytorch': ['pytorch_location', 'pytorch_version', 'rocm_version', 'gpu_benchmarking'],
+            'torch': ['pytorch_location', 'pytorch_version', 'rocm_version', 'gpu_benchmarking'],
             'venv': ['python_venv', 'pytorch_location'],
+            'gguf': ['gguf_pinning', 'pytorch_location'],
+            'llama': ['gguf_pinning'],
+            'export': ['gguf_pinning'],
+            'training': ['gguf_pinning', 'pytorch_version'],
+            'learning': ['gguf_pinning', 'pytorch_version'],
 
             # Tokenizer related
             'token': ['hivemind_tokenizer'],
