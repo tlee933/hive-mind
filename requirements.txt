@@ -17,6 +17,11 @@ aiohttp>=3.9.0  # Async HTTP client for LLM inference
 sentence-transformers>=2.2.0
 numpy>=1.24.0
 
+# Learning pipeline
+gguf @ git+https://github.com/ggml-org/llama.cpp@b8020#subdirectory=gguf-py  # must match brew llama.cpp version
+peft>=0.15.0
+transformers>=4.51.0
+
 # Utilities
 python-dotenv>=1.0.0
 
