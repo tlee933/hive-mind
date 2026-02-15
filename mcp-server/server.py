@@ -5,6 +5,7 @@ Distributed memory system using Redis backend
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -13,7 +14,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -33,6 +34,105 @@ logging.basicConfig(
 logger = logging.getLogger("hive-mind-mcp")
 
 
+class EmbeddingManager:
+    """Manages local embedding model for semantic fact retrieval."""
+
+    def __init__(self, config: Dict):
+        self.config = config
+        self.model = None
+        self._loading = False
+
+    def _ensure_model(self):
+        """Lazy-load the embedding model on first use."""
+        if self.model is not None:
+            return
+        if self._loading:
+            return
+        self._loading = True
+        try:
+            from sentence_transformers import SentenceTransformer
+            model_name = self.config.get('model', 'BAAI/bge-small-en-v1.5')
+            device = self.config.get('device', 'cpu')
+            logger.info(f"Loading embedding model {model_name} on {device}...")
+            self.model = SentenceTransformer(model_name, device=device)
+            logger.info(f"Embedding model loaded ({self.model.get_sentence_embedding_dimension()}d)")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {e}")
+            self.model = None
+        finally:
+            self._loading = False
+
+    def embed_text(self, text: str):
+        """Encode a single string to a numpy array."""
+        import numpy as np
+        self._ensure_model()
+        if self.model is None:
+            return None
+        return self.model.encode(text, normalize_embeddings=True)
+
+    def embed_batch(self, texts: List[str]):
+        """Batch-encode multiple strings."""
+        import numpy as np
+        self._ensure_model()
+        if self.model is None:
+            return None
+        return self.model.encode(texts, normalize_embeddings=True, batch_size=32)
+
+    def find_relevant(self, query: str, facts: Dict[str, str],
+                      cached_embeddings: Dict[str, bytes],
+                      top_k: int = 5, threshold: float = 0.3) -> Set[str]:
+        """
+        Find fact keys relevant to query using cosine similarity.
+
+        Args:
+            query: User query string
+            facts: Dict of fact_key -> fact_value
+            cached_embeddings: Dict of fact_key -> base64-encoded embedding bytes
+            top_k: Max facts to return
+            threshold: Min similarity score
+
+        Returns:
+            Set of relevant fact keys
+        """
+        import numpy as np
+
+        self._ensure_model()
+        if self.model is None:
+            return set()
+
+        query_emb = self.model.encode(query, normalize_embeddings=True)
+
+        scores = []
+        for key in facts:
+            cached = cached_embeddings.get(key)
+            if cached is None:
+                continue
+            try:
+                fact_emb = np.frombuffer(base64.b64decode(cached), dtype=np.float32)
+                # Cosine similarity (vectors are already normalized)
+                score = float(np.dot(query_emb, fact_emb))
+                scores.append((key, score))
+            except Exception:
+                continue
+
+        if not scores:
+            return set()
+
+        # Sort by score descending, take top_k above threshold
+        scores.sort(key=lambda x: x[1], reverse=True)
+        relevant = {key for key, score in scores[:top_k] if score >= threshold}
+
+        # Always include core facts as baseline
+        core_facts = {'operating_system', 'gpu', 'project'}
+        relevant.update(key for key in core_facts if key in facts)
+
+        if relevant:
+            top_3 = scores[:3]
+            logger.info(f"Semantic search: top matches = {[(k, f'{s:.3f}') for k, s in top_3]}")
+
+        return relevant
+
+
 class HiveMindMCP:
     """MCP Server with Redis-backed distributed memory"""
 
@@ -40,6 +140,13 @@ class HiveMindMCP:
         self.config = self._load_config(config_path)
         self.redis_client: Optional[aioredis.Redis] = None
         self.session_id = self._generate_session_id()
+
+        # Initialize embedding manager if enabled
+        embedding_config = self.config.get('embedding', {})
+        if embedding_config.get('enabled', False):
+            self.embedding_manager = EmbeddingManager(embedding_config)
+        else:
+            self.embedding_manager = None
 
     def _load_config(self, config_path: str) -> Dict:
         """Load YAML configuration"""
@@ -90,6 +197,10 @@ class HiveMindMCP:
 
         # Initialize session
         await self._init_session()
+
+        # Bootstrap fact embeddings (non-blocking)
+        if self.embedding_manager:
+            asyncio.create_task(self._bootstrap_embeddings())
 
     async def disconnect(self):
         """Disconnect from Redis"""
@@ -328,6 +439,18 @@ class HiveMindMCP:
         """
         await self.redis_client.hset('facts:system', key, value)
         logger.info(f"Stored fact: {key} = {value}")
+
+        # Pre-compute and cache embedding
+        if self.embedding_manager:
+            try:
+                embedding = self.embedding_manager.embed_text(f"{key}: {value}")
+                if embedding is not None:
+                    b64 = base64.b64encode(embedding.tobytes()).decode('ascii')
+                    embedding_ttl = self.config.get('cache', {}).get('embedding_ttl', 2592000)
+                    await self.redis_client.setex(f'fact_embeddings:{key}', embedding_ttl, b64)
+            except Exception as e:
+                logger.warning(f"Failed to cache embedding for fact '{key}': {e}")
+
         return {'success': True, 'key': key, 'value': value}
 
     async def fact_get(self, key: Optional[str] = None) -> Dict[str, Any]:
@@ -347,17 +470,19 @@ class HiveMindMCP:
     async def fact_delete(self, key: str) -> Dict[str, Any]:
         """Delete a stored fact"""
         await self.redis_client.hdel('facts:system', key)
+        # Clean up cached embedding
+        await self.redis_client.delete(f'fact_embeddings:{key}')
         return {'success': True, 'deleted': key}
 
     async def _get_facts_context(self, query: Optional[str] = None) -> str:
         """
         Get facts formatted for injection into LLM context.
 
-        If query is provided, uses keyword matching to return only relevant facts.
-        Otherwise returns all facts.
+        Uses semantic search (embeddings) as primary method, falling back
+        to keyword matching if embeddings are unavailable or fail.
 
         Args:
-            query: Optional user query for keyword-based filtering
+            query: Optional user query for filtering
 
         Returns:
             Formatted facts string for system prompt injection
@@ -366,9 +491,79 @@ class HiveMindMCP:
         if not facts:
             return ""
 
-        # Keyword mapping: query keywords -> relevant fact keys
+        if not query:
+            return self._format_facts(facts)
+
+        # Try semantic search first
+        if self.embedding_manager:
+            try:
+                cached_embeddings = await self._get_cached_embeddings(facts.keys())
+                if cached_embeddings:
+                    embedding_config = self.config.get('embedding', {})
+                    relevant_keys = self.embedding_manager.find_relevant(
+                        query, facts, cached_embeddings,
+                        top_k=embedding_config.get('top_k', 5),
+                        threshold=embedding_config.get('similarity_threshold', 0.3),
+                    )
+                    if relevant_keys:
+                        filtered = {k: v for k, v in facts.items() if k in relevant_keys}
+                        return self._format_facts(filtered)
+            except Exception as e:
+                logger.warning(f"Semantic search failed, falling back to keywords: {e}")
+
+        # Fallback: keyword matching
+        return self._keyword_filter(query, facts)
+
+    async def _get_cached_embeddings(self, keys) -> Dict[str, str]:
+        """Retrieve cached embeddings from Redis for given fact keys."""
+        keys_list = list(keys)
+        if not keys_list:
+            return {}
+        # Pipeline batches N GETs into one round-trip (works across cluster slots)
+        pipe = self.redis_client.pipeline(transaction=False)
+        for key in keys_list:
+            pipe.get(f'fact_embeddings:{key}')
+        values = await pipe.execute()
+        return {k: v for k, v in zip(keys_list, values) if v is not None}
+
+    async def _bootstrap_embeddings(self):
+        """Compute and cache embeddings for any facts that lack them."""
+        if not self.embedding_manager:
+            return
+
+        facts = await self.redis_client.hgetall('facts:system')
+        if not facts:
+            return
+
+        # Check which facts lack cached embeddings (single pipeline round-trip)
+        keys_list = list(facts.keys())
+        pipe = self.redis_client.pipeline(transaction=False)
+        for key in keys_list:
+            pipe.get(f'fact_embeddings:{key}')
+        cached_values = await pipe.execute()
+        missing = [k for k, v in zip(keys_list, cached_values) if not v]
+
+        if not missing:
+            logger.info(f"All {len(facts)} fact embeddings are cached")
+            return
+
+        logger.info(f"Bootstrapping embeddings for {len(missing)} facts...")
+        texts = [f"{key}: {facts[key]}" for key in missing]
+        embeddings = self.embedding_manager.embed_batch(texts)
+        if embeddings is None:
+            logger.warning("Embedding model not available, skipping bootstrap")
+            return
+
+        embedding_ttl = self.config.get('cache', {}).get('embedding_ttl', 2592000)
+        for i, key in enumerate(missing):
+            b64 = base64.b64encode(embeddings[i].tobytes()).decode('ascii')
+            await self.redis_client.setex(f'fact_embeddings:{key}', embedding_ttl, b64)
+
+        logger.info(f"Bootstrapped {len(missing)} fact embeddings")
+
+    def _keyword_filter(self, query: str, facts: Dict[str, str]) -> str:
+        """Filter facts using keyword matching (fallback when embeddings unavailable)."""
         keyword_map = {
-            # System/OS related
             'os': ['operating_system', 'system_type', 'desktop_environment'],
             'linux': ['operating_system', 'system_type', 'package_management'],
             'fedora': ['operating_system', 'system_type', 'package_management'],
@@ -389,16 +584,12 @@ class HiveMindMCP:
             'podman': ['system_type', 'package_management'],
             'docker': ['system_type', 'package_management'],
             'quadlet': ['system_type'],
-
-            # GPU/Hardware related
             'gpu': ['gpu', 'rocm_version', 'pytorch_location', 'gpu_benchmarking'],
             'amd': ['gpu', 'rocm_version', 'pytorch_location'],
             'radeon': ['gpu', 'rocm_version'],
             'vram': ['gpu', 'pytorch_location'],
             'cuda': ['pytorch_location', 'rocm_version'],
             'rocm': ['rocm_version', 'pytorch_location', 'gpu'],
-
-            # Python/ML related
             'python': ['python_venv', 'pytorch_location', 'hivemind_tokenizer'],
             'pytorch': ['pytorch_location', 'pytorch_version', 'rocm_version', 'gpu_benchmarking'],
             'torch': ['pytorch_location', 'pytorch_version', 'rocm_version', 'gpu_benchmarking'],
@@ -408,50 +599,39 @@ class HiveMindMCP:
             'export': ['gguf_pinning'],
             'training': ['gguf_pinning', 'pytorch_version'],
             'learning': ['gguf_pinning', 'pytorch_version'],
-
-            # Tokenizer related
             'token': ['hivemind_tokenizer'],
             'tiktoken': ['hivemind_tokenizer'],
             'tokenize': ['hivemind_tokenizer'],
             'chunk': ['hivemind_tokenizer'],
             'encode': ['hivemind_tokenizer'],
-
-            # Benchmark related
             'benchmark': ['gpu_benchmarking', 'gpu', 'pytorch_location'],
             'tflops': ['gpu_benchmarking', 'gpu'],
             'performance': ['gpu_benchmarking', 'gpu'],
-
-            # Project related
             'project': ['project', 'hostname'],
             'hive': ['project', 'hivemind_tokenizer'],
             'hivemind': ['project', 'hivemind_tokenizer'],
             'hivecoder': ['project', 'hivemind_tokenizer'],
         }
 
-        if query:
-            # Find relevant fact keys based on query keywords
-            query_lower = query.lower()
-            relevant_keys = set()
+        query_lower = query.lower()
+        relevant_keys = set()
+        for keyword, fact_keys in keyword_map.items():
+            if keyword in query_lower:
+                relevant_keys.update(fact_keys)
 
-            for keyword, fact_keys in keyword_map.items():
-                if keyword in query_lower:
-                    relevant_keys.update(fact_keys)
+        if not relevant_keys:
+            relevant_keys = {'operating_system', 'gpu', 'project'}
 
-            # If no keywords matched, return core facts only
-            if not relevant_keys:
-                relevant_keys = {'operating_system', 'gpu', 'project'}
+        filtered = {k: v for k, v in facts.items() if k in relevant_keys}
+        return self._format_facts(filtered)
 
-            # Filter facts
-            filtered_facts = {k: v for k, v in facts.items() if k in relevant_keys}
-        else:
-            # No query = return all facts (backwards compatible)
-            filtered_facts = facts
-
-        if not filtered_facts:
+    @staticmethod
+    def _format_facts(facts: Dict[str, str]) -> str:
+        """Format facts dict into a string for LLM context injection."""
+        if not facts:
             return ""
-
         lines = ["Relevant user environment facts:"]
-        for key, value in filtered_facts.items():
+        for key, value in facts.items():
             lines.append(f"- {key}: {value}")
         return "\n".join(lines)
 
@@ -818,7 +998,7 @@ async def main():
             ),
             Tool(
                 name="fact_store",
-                description="Store a fact for RAG retrieval. Facts are injected into LLM context automatically.",
+                description="Store a fact for RAG retrieval. Facts are injected into LLM context via semantic search - write descriptive values for best matching.",
                 inputSchema={
                     "type": "object",
                     "properties": {
