@@ -88,7 +88,7 @@ HiveCoder-7B-Q5_K_M.gguf → 5.1 GB (quantized)
 │  Software                                                   │
 │  ├── Fedora 43 bootc Atomic                                │
 │  ├── ROCm 7.12 (TheRock build)                             │
-│  ├── PyTorch 2.9.1 (custom ROCm 7.12 build)                │
+│  ├── PyTorch 2.10.0 (custom ROCm 7.12 build)               │
 │  └── Python 3.14                                           │
 │                                                             │
 │  Training                                                   │
@@ -118,6 +118,7 @@ HiveCoder-7B-Q5_K_M.gguf → 5.1 GB (quantized)
 - [x] **Phase 5**: HiveCoder Integration (Feb 8) 🔗
 - [x] **Phase 6**: R720xd Multi-Node (Feb 8-9) 🖥️
 - [x] **Phase 7**: Continuous Learning (Feb 8) 🧠
+- [x] **Phase 8**: PyTorch 2.10 + ROCm 7.12 Native (Feb 14) 🔧
 
 ---
 
@@ -492,7 +493,7 @@ chunks = tokenizer.chunk_text(long_text, chunk_size=512, overlap=50)
 Consolidated all AI tools into single venv:
 ```
 /var/mnt/build/.venv → TheRock/.venv
-├── ROCm PyTorch 2.9.1
+├── ROCm PyTorch 2.10.0
 ├── open-interpreter
 ├── hivemind_client
 └── tiktoken 0.12.0
@@ -554,6 +555,57 @@ Upgraded Homebrew which pulled llama.cpp b8020 and Claude Code Opus 4.6. The new
 
 ---
 
+## Day 16: PyTorch 2.10 Upgrade (Feb 14, 2026)
+
+PyTorch 2.10 dropped in early February, and ROCm/pytorch had an active `release/2.10` branch with RDNA4-specific fixes. Upgraded from 2.9.1 to 2.10.0, rebuilt against ROCm 7.12.
+
+### What Changed
+
+Switched the build from PyTorch 2.9.1 (detached HEAD, pre-hipified) to the `release/2.10` branch. This required discovering and fixing several issues the old pre-hipified checkout had hidden.
+
+### Build Fixes (4 attempts before success)
+
+| Attempt | Failure | Fix |
+|---------|---------|-----|
+| 1 | Missing `c10/hip/impl/hip_cmake_macros.h.in` | Added hipify step (`tools/amd_build/build_amd.py`) |
+| 2 | `flatbuffers version 24.12 != 25.9` | Replaced patch with sed-based version detection |
+| 3 | `cannot find ROCm device library` | Created `amdgcn/bitcode` symlink (TheRock layout quirk) |
+| 4 | Same device lib error (stale cmake cache) | Full clean build (`rm -rf build`) |
+
+### The TheRock Path Quirk
+
+Fedora Atomic mounts `/opt` at `/var/opt`. TheRock puts device bitcode at `/opt/rocm/lib/llvm/amdgcn/bitcode/` but clang expects `/opt/rocm/amdgcn/bitcode/`. Previous 2.9 builds used a pre-hipified source tree that avoided this. The fix:
+```bash
+sudo mkdir -p /opt/rocm/amdgcn
+sudo ln -sf /opt/rocm/lib/llvm/amdgcn/bitcode /opt/rocm/amdgcn/bitcode
+```
+
+### Results
+
+| Metric | 2.9.1 | 2.10.0 |
+|--------|-------|--------|
+| Build time | ~2h (est.) | **28 min** |
+| FP16 GEMM (1024x) | ~87 TFLOPS | **84.1 TFLOPS** |
+| FP32 GEMM (1024x) | - | **14.8 TFLOPS** |
+| LoRA training | Pass | **Pass** |
+| ROCm mismatch warning | Yes (7.11 vs 7.12) | **None** |
+| Wheel size | 301 MB | **335 MB** |
+
+### Build Script Improvements
+
+The build script (`build_pytorch_gfx1201.sh`) is now fully self-contained:
+- Auto-detects and fixes flatbuffers version from system `flatc`
+- Auto-relaxes numpy/optree pins for Python 3.14
+- Creates amdgcn device library symlinks
+- Runs hipification automatically
+- Works on fresh `release/2.10` checkout with zero manual steps
+
+### TheRock Rebuild Assessment
+
+Checked upstream TheRock (67 commits since our Feb 6 build). No gfx1201-specific fixes. The LLVM compiler bump is the only potentially useful change. Verdict: skip for now, revisit when `therock-7.12` is tagged.
+
+---
+
 ## Credits
 
 Built with:
@@ -562,7 +614,7 @@ Built with:
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 13, 2026
+**Date**: February 14, 2026
 **Author**: hashcat
 
 ---
