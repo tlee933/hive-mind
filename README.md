@@ -2,7 +2,7 @@
 
 > **Distributed AI Memory System with Semantic RAG, Continuous Learning, and Dual LLM Inference**
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](VERSION)
 [![Redis](https://img.shields.io/badge/Redis_Cluster-7.4.7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![ROCm](https://img.shields.io/badge/ROCm-7.12-FF6600?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
@@ -189,7 +189,7 @@ The system improves itself over time:
 
 1. **Collect** - Every LLM interaction is logged to a Redis stream via `learning_queue_add`
 2. **Filter** - Quality filter removes low-quality samples (too short, failed, wrong tool)
-3. **Train** - LoRA fine-tuning (r=16, alpha=32) triggers after 100+ samples accumulate
+3. **Train** - LoRA fine-tuning (r=16, alpha=32) triggers after 50+ samples accumulate
 4. **Export** - Trained model exported to GGUF (Q5_K_M quantization, 5.1 GB)
 5. **Deploy** - Symlink hot-swap + llama-server restart, zero downtime
 
@@ -205,7 +205,7 @@ python learning-pipeline/scripts/continuous_learning.py --train-now
 |---------------|-------|
 | Base model | Qwen2.5-Coder-7B-Instruct |
 | Trainable params | 40.3M (0.53% of 7.66B) |
-| Training threshold | 100 samples |
+| Training threshold | 50 samples |
 | Epoch per cycle | 1 (incremental) |
 | Final loss (v2) | 0.2998 |
 | Export format | GGUF Q5_K_M (5.1 GB) |
@@ -304,7 +304,7 @@ MIT
 
 <div align="center">
 
-**49 commits** · **7,500+ lines of Python** · **23 source files** · **4 systemd services**
+**55 commits** · **7,500+ lines of Python** · **23 source files** · **4 systemd services**
 
 Built on Fedora Atomic (Kinoite 43) with ROCm 7.12 and PyTorch 2.10.0
 
