@@ -889,6 +889,98 @@ The bulk of legitimate queries now land in the 0.7–0.8 band, well above the 0.
 
 ---
 
+## Day 19: v0.9.0 — Dual LLM, Architecture Diagram, GitHub Release (Feb 15, 2026)
+
+### The Crash That Wasn't
+
+System went down mid-session. Dug through `journalctl -b -1` expecting a kernel panic — found an orderly `sudo reboot` triggered after an rpm-ostree package update (Google Chrome). The real problem: a new user service for **Qwen3-30B-A3B** was crash-looping on startup due to an invalid `--reasoning-budget 4096` flag (llama-server only accepts `-1` or `0`).
+
+### VRAM Math: 30B Won't Fit
+
+Quick math killed the 30B idea:
+```
+HiveCoder-7B:     ~7.7 GB
+Qwen3-30B-A3B:   ~18 GB model + KV cache (65536 ctx × 4 parallel)
+Total:            ~30+ GB → maxes out the 32 GB card
+```
+
+Swapped to **Qwen3-14B** (Q4_K_M, 8.4 GB) — fits comfortably alongside HiveCoder:
+```
+HiveCoder-7B:     ~7.7 GB  (:8089, system service)
+Qwen3-14B:        ~13.3 GB (:8080, user service)
+Total:            ~21 GB / 32 GB — 11 GB free headroom
+```
+
+Fixed the service file:
+- Model: 30B-A3B → **14B**
+- `--reasoning-budget`: `4096` → `-1` (unrestricted)
+- `--ctx-size`: 65536 → 32768
+
+Both models verified working:
+```
+HiveCoder-7B:  596 tok/s prompt, 56 tok/s generation
+Qwen3-14B:     241 tok/s prompt, 54 tok/s generation (thinking mode active)
+```
+
+### Architecture Diagram
+
+Created a full block diagram with Pillow (3400×1480px) showing all components and data flow:
+- Clients → MCP/HTTP → Redis Cluster → LLM Inference
+- Embedding Engine → RAG Pipeline → Prompt Injection
+- Continuous Learning → LoRA → GGUF → Hot Swap
+- Multi-node layout (aurora + r720xd planned)
+
+### Versioning
+
+Established semver starting from 0.5.0:
+
+| Version | Milestone |
+|---------|-----------|
+| 0.5.0 | Redis Cluster + MCP Server |
+| 0.6.0 | Dual-Mode HTTP API + Local LLM |
+| 0.7.0 | Learning Pipeline + HiveCoder-7B |
+| 0.8.0 | Semantic RAG + Fact Storage |
+| **0.9.0** | **Dual LLM + Architecture Overhaul (current)** |
+| 1.0.0 | Production release (planned) |
+
+Added `VERSION` file, wired into HTTP API (`GET /` returns `"version": "0.9.0"`), created git tag `v0.9.0`.
+
+### README Rewrite
+
+Gutted the old README (509 lines of emoji soup) and rewrote it (313 lines):
+- Accurate models, ports, and stats
+- Architecture table + data flow diagram
+- Comparison table vs Mem0, LangMem, Qdrant MCP
+- Current performance numbers
+- Version badge
+
+### GitHub Release
+
+Published `v0.9.0` release with full release notes and architecture diagram.
+
+### Full System Test
+
+Verified all layers post-reboot:
+- **HTTP API**: 12 endpoints tested (/, /health, /stats, /llm/status, /v1/models, /v1/chat/completions, /memory/store, /memory/recall, /fact/get, /rag/suggestions, /llm/generate, /learning/queue/add)
+- **MCP Tools**: 13/13 pass — full write/read/delete round-trip on every tool
+- **LLM Inference**: Both models serving, RAG injection working
+- **Learning Queue**: 51 samples accumulated (threshold 100 for auto-training)
+
+### Key Numbers
+
+| Metric | Value |
+|--------|-------|
+| Version | 0.9.0 |
+| VRAM usage | 21 GB / 32 GB |
+| Models serving | 2 (HiveCoder-7B + Qwen3-14B) |
+| MCP tools | 13/13 passing |
+| HTTP endpoints | 12/12 passing |
+| RAG hit rate | 84% |
+| Learning queue | 51 samples |
+| Git commits | 51 |
+
+---
+
 ## Credits
 
 Built with:
