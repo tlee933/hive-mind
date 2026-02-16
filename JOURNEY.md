@@ -120,6 +120,7 @@ HiveCoder-7B-Q5_K_M.gguf → 5.1 GB (quantized)
 - [x] **Phase 7**: Continuous Learning (Feb 8) 🧠
 - [x] **Phase 8**: PyTorch 2.10 + ROCm 7.12 Native (Feb 14) 🔧
 - [x] **Phase 9**: Active Learning - RAG Retrieval Mining (Feb 15) 🔍
+- [x] **Phase 10**: First Continuous Training on 7B — v0.9.1 (Feb 16) 🏋️
 
 ---
 
@@ -981,6 +982,66 @@ Verified all layers post-reboot:
 
 ---
 
+## Day 20: First Continuous Training Run on 7B (Feb 16, 2026)
+
+### The OOM Bug
+
+Triggered `--train-now` with 32 filtered samples and the GPU immediately OOM'd. Root cause: the auto batch size calculator in `train_lora.py` estimated **40 MB per sample** — calibrated for Qwen2.5-**0.5B**, not the 7B model we'd been running since Day 8.
+
+```
+torch.OutOfMemoryError: HIP out of memory. Tried to allocate 1.12 GiB.
+GPU 0 has a total capacity of 31.86 GiB of which 30.00 MiB is free.
+```
+
+**First attempt**: OOM because llama-server was holding the GPU. Stopped `hivecoder-llm` to free VRAM.
+
+**Second attempt**: Still OOM — 34GB free, but batch_size=32 meant the forward+backward pass needed ~18GB on top of the 14GB model weights. The `logits.float()` call during loss computation pushed it over.
+
+### The Fix
+
+Updated `get_optimal_batch_size()`:
+
+| Parameter | Before | After |
+|-----------|--------|-------|
+| `memory_per_sample` | 40 MB (0.5B estimate) | **2 GB** (7B estimate) |
+| Auto batch_size (32GB) | 32 | **~6** |
+| Effective batch (with grad_accum=4) | 128 | **24** |
+
+### Successful Training
+
+With the fix, the full pipeline ran clean:
+
+| Stage | Result | Time |
+|-------|--------|------|
+| LoRA training | 32 samples, loss: 0.0000 | ~20s |
+| GGUF export | Q5_K_M (5.1 GB) | ~2 min |
+| Deploy + health check | llama-server hot-swap | ~10s |
+| Version bump | 0.9.0 → **0.9.1** | instant |
+| Auto-cleanup | 4 old versions removed (~50 GB) | instant |
+
+### Semantic Versioning
+
+This was also the first deploy to use the semantic versioning system added in the previous session. The daemon now:
+- Reads `learning-pipeline/MODEL_VERSION` for current semver
+- Bumps patch version on successful deploy
+- Publishes `model_version` in Redis stats (visible in `get_stats`)
+
+### Lessons Learned
+
+- Always calibrate batch size estimates to the actual model size, not the prototype
+- The `PYTORCH_ALLOC_CONF=expandable_segments:True` env var helps with HIP memory fragmentation
+- Stop llama-server before training — can't share 32GB between inference and training on the same card
+- Training loss of 0.0000 on 32 samples suggests the model is memorizing — need more diverse data or multiple epochs to get meaningful gradients
+
+### Files Changed
+
+- `learning-pipeline/scripts/train_lora.py` — Fixed batch size estimate (40MB → 2GB per sample)
+- `learning-pipeline/scripts/continuous_learning.py` — Semantic versioning (`_get_model_version`, `_bump_model_version`), `model_version` in published stats
+- `mcp-server/server.py` — `model_version` field in `get_stats` response
+- `learning-pipeline/MODEL_VERSION` — New file tracking semver (0.9.1)
+
+---
+
 ## Credits
 
 Built with:
@@ -989,7 +1050,7 @@ Built with:
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 15, 2026
+**Date**: February 16, 2026
 **Author**: hashcat
 
 ---
