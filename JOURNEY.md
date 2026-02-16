@@ -119,6 +119,7 @@ HiveCoder-7B-Q5_K_M.gguf → 5.1 GB (quantized)
 - [x] **Phase 6**: R720xd Multi-Node (Feb 8-9) 🖥️
 - [x] **Phase 7**: Continuous Learning (Feb 8) 🧠
 - [x] **Phase 8**: PyTorch 2.10 + ROCm 7.12 Native (Feb 14) 🔧
+- [x] **Phase 9**: Active Learning - RAG Retrieval Mining (Feb 15) 🔍
 
 ---
 
@@ -707,6 +708,72 @@ Generated a 5th-power Nova fractal on the GPU as a wallpaper:
 - `mcp-server/server.py` — Added `EmbeddingManager` class, semantic search in `_get_facts_context()`, Redis pipeline optimization, embedding bootstrap
 - `config.yaml` — `embedding` section (model, device, top_k, similarity_threshold)
 - `requirements.txt` — `sentence-transformers>=2.2.0` (already listed for Phase 2, now active)
+
+---
+
+## Day 18: Active Learning — RAG Retrieval Mining (Feb 15, 2026)
+
+### The Problem
+
+The semantic embedding RAG system (shipped earlier today) returns relevant facts for queries, but had zero visibility into when it fails. Queries that don't match any facts well silently fall back to default core facts. No way to know what knowledge gaps exist or what facts to add next.
+
+### The Solution: Retrieval Quality Tracking
+
+Every RAG retrieval now logs its method, quality classification, and similarity scores to Redis. Three data structures capture different views:
+
+| Redis Key | Type | Purpose |
+|-----------|------|---------|
+| `rag:retrieval_log` | Stream (maxlen 5000) | Full audit trail — every query with method, quality, scores |
+| `rag:stats` | Hash (HINCRBY) | Aggregate counters — total, per-method, poor retrievals |
+| `rag:missed_queries` | Sorted Set (capped 500) | Failed queries ranked by frequency |
+
+**Quality Classification:**
+
+| Quality | Condition |
+|---------|-----------|
+| `good` | Semantic hit, top score >= 0.5 |
+| `weak` | Semantic hit, top score 0.3–0.5 |
+| `fallback` | Fell back to keyword filter |
+| `miss` | Only default core facts returned |
+
+### Implementation
+
+**`RetrievalResult` dataclass** — `EmbeddingManager.find_relevant()` now returns structured results with keys, all scored matches, and top score instead of a bare `Set[str]`.
+
+**`_log_retrieval()` method** — fires via `asyncio.create_task()` (non-blocking, fire-and-forget). Writes all three Redis structures in a single pipeline for minimal overhead.
+
+**`_keyword_filter()` refactored** — now returns a `(text, method)` tuple distinguishing `"keyword"` matches from `"default"` fallback, so the logger knows which path was taken.
+
+**`fact_suggestions()` MCP tool** — reads `rag:missed_queries`, extracts topic words (stop-word filtered), groups by frequency, cross-references against existing facts, and returns actionable suggestions for new facts to add.
+
+### New Tools & Endpoints
+
+| Interface | Name | Description |
+|-----------|------|-------------|
+| MCP Tool | `fact_suggestions` | Missed query analysis + suggested topics |
+| HTTP GET | `/rag/suggestions?limit=N` | Same, over HTTP |
+| MCP Tool | `get_stats` (extended) | Now includes `rag_retrieval` section |
+
+### Test Results
+
+```
+# After 4 test queries:
+Stream length: 4
+Stats: {total: 4, method_semantic: 4}
+
+# All queries classified as "good" — embedding model performing well:
+"What GPU do I have?"                           → top_score: 0.772
+"Deploy kubernetes cluster on my machine?"      → top_score: 0.616
+"Configure nginx reverse proxy?"                → top_score: 0.626
+"What color is the sky?"                        → top_score: 0.571
+```
+
+The `bge-small-en-v1.5` model finds relevant facts even for queries with no direct keyword match ("kubernetes" → matched system facts at 0.62). As fact gaps emerge over real usage, `fact_suggestions` will surface them.
+
+### Files Changed
+
+- `mcp-server/server.py` — `RetrievalResult` dataclass, `_log_retrieval()`, refactored `_get_facts_context()` and `_keyword_filter()`, `fact_suggestions()` method + MCP tool, extended `get_stats()`
+- `mcp-server/http_server.py` — `GET /rag/suggestions` endpoint
 
 ---
 
