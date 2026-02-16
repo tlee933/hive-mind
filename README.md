@@ -1,313 +1,144 @@
-# 🐝 Hive-Mind
+# Hive-Mind
 
-> **Distributed AI Memory System with Dual-Mode Access: HTTP API + MCP Protocol**
+> **Distributed AI Memory System with Semantic RAG, Continuous Learning, and Dual LLM Inference**
 
-[![Redis](https://img.shields.io/badge/Redis-7.4.7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Redis](https://img.shields.io/badge/Redis_Cluster-7.4.7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![ROCm](https://img.shields.io/badge/ROCm-7.12.0-FF6600?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
+[![ROCm](https://img.shields.io/badge/ROCm-7.12-FF6600?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.10.0-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Journey began 2026-02-01** 🚀 *12 days and counting...*
-**Dual-mode HTTP API added 2026-02-03** ⚡
-**HiveCoder-7B trained 2026-02-08** 🧠 *([PyTorch 2.9.1 + ROCm 7.12](learning-pipeline/TRAINING_RESULTS.md))*
-**RAG + tiktoken integration 2026-02-12** ⚡ *6x faster tokenization*
+A self-improving AI memory system that persists context across sessions, enriches LLM prompts with semantic RAG, and continuously fine-tunes a local model from its own interactions. Fully local, zero cloud dependencies.
+
+![Architecture](hivemind_architecture.png)
 
 ---
 
-## 📖 The Journey
+## What It Does
 
-Started with a simple question: *"How do we fix context loss?"*
+- **Persistent memory** across terminal restarts, shared across machines via Redis cluster
+- **Semantic RAG** that automatically injects relevant context into every LLM prompt
+- **Continuous learning** pipeline that collects interactions, fine-tunes via LoRA, exports to GGUF, and hot-swaps the model into production
+- **Dual LLM serving** on a single GPU (HiveCoder-7B specialist + Qwen3-14B general purpose)
+- **Dual access modes** via MCP protocol (Claude Code) and HTTP API (any client)
+- **Active retrieval tracking** with hit rate monitoring and gap analysis
 
-Ended with a **production-ready distributed AI memory system** with **dual-mode access**:
-- ✅ Survives terminal restarts
-- ✅ Shares context across machines
-- ✅ Caches expensive operations
-- ✅ Learns from interactions
-- ✅ Scales horizontally
-- ✅ Never forgets
-- ✅ **HTTP API for Open Interpreter & any tool**
-- ✅ **MCP Protocol for Claude Code**
-- ✅ **Cross-tool context sharing**
+---
 
-### What We Built
+## Architecture
+
+| Component | Port | Role |
+|-----------|------|------|
+| **Redis Cluster** | 7000-7005 | 3 masters + 3 replicas, sessions, facts, caches, streams |
+| **HiveCoder-7B** | 8089 | Fine-tuned Qwen2.5-Coder-7B (LoRA), system service |
+| **Qwen3-14B** | 8080 | General-purpose thinking model, user service |
+| **HTTP API** | 8090 | FastAPI server, OpenAI-compatible proxy with RAG injection |
+| **MCP Server** | stdio | Claude Code integration, 13 tools |
+| **Learning Daemon** | - | 5-min interval, drains queue, triggers training |
+
+### MCP Tools
+
+| Category | Tools |
+|----------|-------|
+| **Memory** | `memory_store`, `memory_recall`, `memory_list_sessions` |
+| **Facts / RAG** | `fact_store`, `fact_get`, `fact_delete`, `fact_suggestions` |
+| **LLM** | `llm_generate`, `llm_code_assist`, `llm_complete` |
+| **System** | `tool_cache_get`, `tool_cache_set`, `learning_queue_add`, `get_stats` |
+
+### Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    🐝 HIVE-MIND                         │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │   Redis      │  │   Redis      │  │   Redis      │ │
-│  │  Master :7000│  │  Master :7001│  │  Master :7002│ │
-│  │  Slots 0-5k  │  │  Slots 5k-10k│  │  Slots 10k-16k│
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘ │
-│         │                 │                 │          │
-│  ┌──────▼───────┐  ┌──────▼───────┐  ┌──────▼───────┐ │
-│  │   Replica    │  │   Replica    │  │   Replica    │ │
-│  │   :7003      │  │   :7004      │  │   :7005      │ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
-│                                                         │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Redis Sentinel (Quorum 2/3)                    │   │
-│  │  Ports: 26379, 26380, 26381                     │   │
-│  │  Auto-failover: < 10s                           │   │
-│  └─────────────────────────────────────────────────┘   │
-│                                                         │
-│  ┌──────────────────────┐  ┌──────────────────────┐   │
-│  │  HTTP API (Port 8090)│  │  MCP Server (stdio)  │   │
-│  │  • REST Endpoints    │  │  • Session Mgmt      │   │
-│  │  • FastAPI/Uvicorn   │  │  • Tool Caching      │   │
-│  │  • Systemd Service   │  │  • Learning Queue    │   │
-│  └──────────────────────┘  └──────────────────────┘   │
-│           │                           │                │
-│           └───────────┬───────────────┘                │
-│                       │                                │
-│              Shared Redis Backend                      │
-│                                                         │
-│  ┌──────────────┐              ┌──────────────┐       │
-│  │ llama-server │              │ llama-server │       │
-│  │ Qwen2.5-7B   │              │  Qwen3-8B    │       │
-│  │ Port :8080   │              │ Port :8088   │       │
-│  │ 89 tok/s ⚡  │              │ 74 tok/s ⚡  │       │
-│  └──────────────┘              └──────────────┘       │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-        │                                   │
-        ▼                                   ▼
-   Open Interpreter                    Claude Code
-   Python Scripts                      (MCP Protocol)
-   Any HTTP Client                     Future: DELL
+User Query
+  -> MCP Server or HTTP API
+    -> Semantic RAG (embed query, cosine sim against facts)
+      -> Inject matching facts into system prompt
+        -> llama-server (HiveCoder-7B on :8089)
+          -> Response returned + cached
+            -> Interaction logged to learning queue
+
+Learning Queue (Redis Stream)
+  -> Continuous Learning Daemon (every 5 min)
+    -> Quality filter -> LoRA fine-tune -> GGUF export -> Hot swap
 ```
 
 ---
 
-## ⚡ Performance Benchmarks
+## Performance
 
-### 📊 Redis Cluster
-
-| Operation | Ops/Second | Latency |
-|-----------|------------|---------|
-| **SET** | 10,655 | < 1ms |
-| **GET** | 14,728 | < 1ms |
-| **HSET** | 11,308 | < 1ms |
-| **Mixed (70R/30W)** | 12,720 | < 1ms |
-| **Pipelined** | **59,763** ⚡ | < 1ms |
-
-**Average**: 12,701 ops/sec  
-**Peak**: 59,763 ops/sec (pipelined)
-
-### 🦙 LLM Inference
-
-| Model | Port | Tokens/Sec | VRAM |
-|-------|------|------------|------|
-| **Qwen2.5-Coder-7B** | 8080 | 89.0 tok/s ⚡ | 4.2 GB |
-| **Qwen3-8B** | 8088 | 74.4 tok/s ⚡ | 5.0 GB |
-
-**Total VRAM**: 11.2 GB / 32 GB (65% free)
-**Headroom**: Can fit 30B model simultaneously!
-
-### 🐝 Dual-Mode Access
-
-| Mode | Protocol | Performance | Use Case |
-|------|----------|-------------|----------|
-| **HTTP API** | REST (Port 8090) | ~5ms latency, 1000+ req/s | Open Interpreter, Scripts, External Tools |
-| **MCP Protocol** | stdio | < 1ms latency, 5000+ ops/s | Claude Code Integration |
-
-**MCP Operations**:
-- memory_store: 6,260 ops/s
-- memory_recall: 9,733 ops/s
-- tool_cache_set: 8,140 ops/s
-- tool_cache_get: 9,798 ops/s
-
-### 🧠 Learning Pipeline (Phase 4) ✅ OPERATIONAL
-
-**PyTorch 2.9.1 + ROCm 7.12** - [Build Story](https://github.com/tlee933/TheRock-Forge-EXPERIMENTAL/tree/fedora-atomic-rocm7.12-ai-pro-experimental/external-builds/pytorch/JOURNEY.md)
-
-| Model | Dataset | Loss | Time | Throughput |
-|-------|---------|------|------|------------|
-| **Qwen2.5-0.5B** | 1,500 samples | 0.34 | 9 min | 8.2 samples/s |
-| **Qwen2.5-Coder-7B** | 10,156 samples | **0.30** | 1h 43min | 4.9 samples/s |
-
-**Features**: LoRA fine-tuning, GGUF export, TorchAO quantization, Zero HIP errors ✨
-
-### 🧠 Smart Optimizer (Phase 4.5) ✅ NEW
-
-Auto-selects optimal configuration based on model, hardware, and quality requirements:
-
-```bash
-python scripts/auto_optimize.py --model "Qwen/Qwen2.5-Coder-7B" --task training --quality balanced
-```
-
-| Detection | Auto-Config |
-|-----------|-------------|
-| GPU arch (gfx1201) | LoRA rank (r=8/16/32) |
-| VRAM (34 GB) | Batch size + grad accum |
-| BF16 support | Precision (bf16/fp16) |
-| Flash Attention | Quantization (int4/int8/Q4_K_M) |
-
-**Quality Modes**: `fast` (speed) → `balanced` → `best` (quality)
-
-See [`learning-pipeline/TRAINING_RESULTS.md`](learning-pipeline/TRAINING_RESULTS.md) for full details.
+| Component | Metric | Value |
+|-----------|--------|-------|
+| Redis Cluster | Pipeline throughput | 59,763 ops/s |
+| Redis Cluster | Latency | < 1ms |
+| HiveCoder-7B | Generation speed | 56 tok/s |
+| HiveCoder-7B | Prompt processing | 596 tok/s |
+| Qwen3-14B | Generation speed | 54 tok/s |
+| Qwen3-14B | Prompt processing | 241 tok/s |
+| RAG | Hit rate | 84% (31 facts, semantic-only) |
+| Training | Full cycle | ~4 min (LoRA + GGUF export) |
+| VRAM | Total / Used / Free | 32 GB / 21 GB / 11 GB |
 
 ---
 
-## 🎯 Features
-
-### 🔌 Dual-Mode Access
-- **HTTP API (Port 8090)**: RESTful access for Open Interpreter, scripts, any tool
-- **MCP Protocol (stdio)**: Native integration for Claude Code
-- **OpenAI-Compatible Proxy**: `/v1/chat/completions` with RAG injection
-- **Cross-Tool Sharing**: Context stored via HTTP is accessible via MCP and vice versa
-- **Systemd Service**: HTTP API auto-starts on boot
-- **Python Client**: Easy integration with `hivemind_client`
-- **Interactive Docs**: Auto-generated Swagger UI at `/docs`
-
-### ⚡ Fast Tokenization (NEW!)
-- **tiktoken 0.12.0**: Pre-built wheel for Python 3.14
-- **Custom Encodings**: `hivecoder` encoding for local models
-- **6x Faster**: Rust-based tokenizer vs HuggingFace Python
-- **hivemind_client.tokenizer**: Token counting, chunking, truncation
-
-| Text Size | tiktoken (Rust) | HuggingFace | Speedup |
-|-----------|-----------------|-------------|---------|
-| Medium (900 chars) | 31,000/sec | 4,800/sec | **6.4x** |
-| Long (8.6K chars) | 3,400/sec | 574/sec | **6.0x** |
-
-### 💾 Distributed Memory
-- **Persistent Sessions**: Context survives terminal restarts
-- **Multi-Machine**: Share memory across BEAST, DELL, and future nodes
-- **Auto-Sharding**: 16,384 hash slots across 3 masters
-- **High Availability**: 3 replicas + Sentinel auto-failover
-
-### 🚀 Smart Caching
-- **Tool Output Cache**: 8,140 writes/sec, 9,798 reads/sec
-- **TTL-based Expiry**: Configurable per cache type
-- **Cluster-Wide**: All nodes share the same cache
-
-### 🧠 Learning Pipeline (Phase 4) 🔥 **NEW!**
-- **1,500 Training Samples**: Comprehensive Fedora bootc + Linux + AI expertise
-- **LoRA Fine-tuning**: 1.05% trainable params (80.7M / 7.6B)
-- **BF16 Precision**: 125 TFLOPS on gfx1201 (RDNA 4)
-- **On-the-fly Tokenization**: Memory-efficient training pipeline
-- **Native Performance**: TheRock ROCm 7.12 (+19% vs generic container)
-- **Status**: 85% complete (training pipeline proven, ROCm compat fix needed)
-
-### 🔒 Production-Ready
-- **AOF + RDB Persistence**: No data loss
-- **Automatic Failover**: < 10s recovery
-- **Password Authentication**: Secured cluster
-- **Resource Efficient**: 2.93 MB memory used, 12 GB available
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
-```bash
-# System
 - Docker (for Redis cluster)
-- Python 3.14+
-- ROCm 7.12+ (for GPU inference)
+- Python 3.12+ (tested on 3.14)
+- AMD GPU with 16GB+ VRAM and ROCm 6.x+ (tested on R9700 32GB, ROCm 7.12)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) (`llama-server` binary)
 
-# Hardware
-- AMD GPU with 8GB+ VRAM (tested on R9700 XT 32GB)
-- 16GB+ RAM recommended
-- SSD storage
-```
-
-### Installation
+### Install
 
 ```bash
-# Clone the repo
 git clone https://github.com/tlee933/hive-mind.git
 cd hive-mind
 
-# Deploy Redis Cluster (6 nodes + 3 Sentinels)
+# Deploy Redis Cluster (6 nodes + Docker)
 ./scripts/deploy-redis-cluster.sh
 
-# Set up Python environment
+# Python environment
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Configure (copy example and set your password)
+# Configure
 cp config.example.yaml config.yaml
 # Edit config.yaml with your Redis password
 
-# Test everything
+# Verify
 python3 tests/test-hive-mind-stack.py
-
-# Run performance benchmarks
-python3 tests/benchmark-hive-mind.py
 ```
 
 ### Start Services
 
 ```bash
-# Start Redis cluster (if not running)
-docker ps | grep redis  # Should show 9 containers
+# Redis (should already be running via Docker)
+docker ps | grep redis
 
-# Start llama-servers (optional)
-./scripts/start-llama-servers.sh
+# LLM inference (system service)
+sudo systemctl start hivecoder-llm
 
-# Run MCP server
-python mcp-server/server.py --debug
+# HTTP API (system service)
+sudo systemctl start hive-mind-http
+
+# Continuous learning daemon (system service)
+sudo systemctl start hivecoder-learning
+
+# Optional: Qwen3-14B general-purpose model (user service)
+systemctl --user start llama-server
 ```
 
----
+### Claude Code Integration
 
-## 🔌 Integration
-
-### For Open Interpreter / Python Scripts
-
-**HTTP API is already running on port 8090!**
-
-```python
-from hivemind_client import HiveMindClient
-
-hive = HiveMindClient()
-
-# Store context
-hive.store_memory(
-    context="Working on data analysis",
-    files=["data.csv"],
-    task="Generate insights"
-)
-
-# Recall context
-context = hive.recall_memory()
-print(context['context'])
-
-# Get stats
-stats = hive.get_stats()
-print(f"Total sessions: {stats['total_sessions']}")
-
-# Fast tokenization
-from hivemind_client import tokenizer
-count = tokenizer.count_tokens("Your text here")
-chunks = tokenizer.chunk_text(long_text, chunk_size=512, overlap=50)
-```
-
-**Service Management**:
-```bash
-sudo systemctl status hive-mind-http   # Check status
-sudo systemctl restart hive-mind-http  # Restart
-sudo journalctl -u hive-mind-http -f   # View logs
-```
-
-**API Documentation**: http://localhost:8090/docs
-
-### For Claude Code
-
-Add to `~/.config/claude-code/mcp_config.json`:
+Add to your MCP config (`.mcp.json` or `~/.config/claude-code/mcp_config.json`):
 
 ```json
 {
   "mcpServers": {
     "hive-mind": {
-      "command": "/path/to/hive-mind/.venv/bin/python",
-      "args": ["/path/to/hive-mind/mcp-server/server.py"],
+      "command": "python",
+      "args": ["mcp-server/server.py"],
       "env": {
         "CONFIG_PATH": "/path/to/hive-mind/config.yaml"
       }
@@ -316,193 +147,166 @@ Add to `~/.config/claude-code/mcp_config.json`:
 }
 ```
 
-Restart Claude Code and the memory system activates automatically! 🎉
+### HTTP API
 
-### Cross-Tool Context Sharing
+```bash
+# Health check
+curl localhost:8090/health
 
-Context stored via HTTP API is accessible via MCP protocol and vice versa:
+# Store memory
+curl -X POST localhost:8090/memory/store \
+  -H "Content-Type: application/json" \
+  -d '{"context": "Working on feature X", "task": "implement auth"}'
 
+# Chat with RAG injection
+curl localhost:8090/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "How do I build PyTorch on this system?"}]}'
+
+# Interactive docs
+open http://localhost:8090/docs
 ```
-Open Interpreter → HTTP API → Redis ← MCP Protocol ← Claude Code
-```
 
-**All tools share the same memory!**
+### Python Client
+
+```python
+from hivemind_client import HiveMindClient
+
+hive = HiveMindClient()
+hive.store_memory(context="Working on auth", files=["auth.py"])
+ctx = hive.recall_memory()
+
+stats = hive.get_stats()
+print(f"Sessions: {stats['total_sessions']}, RAG hit rate: {stats['rag_retrieval']['hit_rate']}")
+```
 
 ---
 
-## 📚 Documentation
+## Continuous Learning Pipeline
+
+The system improves itself over time:
+
+1. **Collect** - Every LLM interaction is logged to a Redis stream via `learning_queue_add`
+2. **Filter** - Quality filter removes low-quality samples (too short, failed, wrong tool)
+3. **Train** - LoRA fine-tuning (r=16, alpha=32) triggers after 100+ samples accumulate
+4. **Export** - Trained model exported to GGUF (Q5_K_M quantization, 5.1 GB)
+5. **Deploy** - Symlink hot-swap + llama-server restart, zero downtime
+
+```bash
+# Check learning status
+python learning-pipeline/scripts/continuous_learning.py --status
+
+# Force immediate training
+python learning-pipeline/scripts/continuous_learning.py --train-now
+```
+
+| Training Stat | Value |
+|---------------|-------|
+| Base model | Qwen2.5-Coder-7B-Instruct |
+| Trainable params | 40.3M (0.53% of 7.66B) |
+| Training threshold | 100 samples |
+| Epoch per cycle | 1 (incremental) |
+| Final loss (v2) | 0.2998 |
+| Export format | GGUF Q5_K_M (5.1 GB) |
+| Full cycle time | ~4 minutes |
+
+---
+
+## Semantic RAG
+
+Every LLM call is enriched with relevant facts from the knowledge base:
+
+1. **Embed** the user query using bge-small-en-v1.5 (384-dim, runs on CPU)
+2. **Search** against pre-computed fact embeddings via cosine similarity
+3. **Filter** by threshold (>= 0.45 good, >= 0.6 strong match)
+4. **Inject** matching facts into the system prompt before sending to llama-server
+5. **Track** retrieval quality (hit rate, missed queries, weak matches)
+
+```bash
+# View RAG suggestions for gaps in knowledge
+curl localhost:8090/rag/suggestions
+```
+
+The `fact_suggestions` tool analyzes missed queries and recommends new facts to add, creating an active learning loop.
+
+---
+
+## Hardware
+
+| Node | Role | Specs |
+|------|------|-------|
+| **aurora** (active) | GPU inference + training | AMD R9700 32GB VRAM, ROCm 7.12, 12-core Ryzen 9 5900X |
+| **r720xd** (planned) | Embeddings + storage | Dual Xeon E5-2660, 64GB RAM, 24x 2.5" bays |
+
+Connected via Tailscale VPN mesh.
+
+---
+
+## Project Structure
+
+```
+hive-mind/
+  mcp-server/
+    server.py          # MCP server (stdio, 13 tools)
+    http_server.py     # FastAPI HTTP API (:8090)
+  learning-pipeline/
+    scripts/
+      continuous_learning.py   # Training daemon
+      train_lora.py            # LoRA fine-tuning
+      export_model.py          # GGUF export
+      auto_optimize.py         # Hardware-aware config
+    models/                    # Model registry + exports
+  scripts/
+    deploy-redis-cluster.sh    # Redis cluster setup
+    start-hivecoder.sh         # LLM server launcher
+  tests/
+    test-hive-mind-stack.py    # Integration tests
+    benchmark-hive-mind.py     # Performance benchmarks
+  hivemind_client/             # Python client library
+  config.example.yaml          # Configuration template
+```
+
+---
+
+## How It Compares
+
+| Feature | Hive-Mind | Mem0 | LangMem | Qdrant MCP |
+|---------|:---------:|:----:|:-------:|:----------:|
+| Persistent memory | Yes | Yes | Yes | Yes |
+| Semantic RAG | Yes | Yes | Yes | Yes |
+| Local LLM inference | Yes | No | No | No |
+| Continuous fine-tuning | **Yes** | No | No | No |
+| Self-improving model | **Yes** | No | No | No |
+| Retrieval quality tracking | **Yes** | No | No | No |
+| Multi-model serving | Yes | No | No | No |
+| MCP protocol | Yes | Yes | No | Yes |
+| Fully local / zero cloud | **Yes** | No | No | Partial |
+
+---
+
+## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [README.md](README.md) | This file - overview and quick start |
-| [QUICKSTART.md](QUICKSTART.md) | **Get started in 2 minutes!** |
-| [DUAL_MODE_SETUP.md](DUAL_MODE_SETUP.md) | **Complete dual-mode guide (NEW!)** |
-| [OPEN_INTERPRETER_INTEGRATION.md](docs/OPEN_INTERPRETER_INTEGRATION.md) | **Open Interpreter integration (NEW!)** |
-| [SETUP_COMPLETE.md](SETUP_COMPLETE.md) | **Dual-mode setup summary (NEW!)** |
-| [MCP_SERVER_READY.md](MCP_SERVER_READY.md) | Claude Code MCP integration |
-| [CLUSTER_STATUS.md](CLUSTER_STATUS.md) | Redis cluster operations manual |
-| [PERFORMANCE.md](PERFORMANCE.md) | Detailed benchmark results |
-| [tiktoken/README.md](tiktoken/README.md) | **tiktoken for Python 3.14 + custom encodings (NEW!)** |
+| [JOURNEY.md](JOURNEY.md) | Full project history, day-by-day build log |
+| [QUICKSTART.md](QUICKSTART.md) | Get started in 2 minutes |
+| [learning-pipeline/TRAINING_RESULTS.md](learning-pipeline/TRAINING_RESULTS.md) | Training benchmarks and results |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Deep dive into system design |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment guide |
 
 ---
 
-## 🗺️ Roadmap
+## License
 
-### ✅ Phase 1: Redis Cluster (COMPLETE)
-- [x] 6-node cluster with auto-sharding
-- [x] 3 Sentinels for high availability
-- [x] AOF + RDB persistence
-- [x] Password authentication
-- [x] Performance: 12K+ ops/sec
-
-### ✅ Phase 2: MCP Server (COMPLETE)
-- [x] Cluster-aware client
-- [x] Session management
-- [x] Tool caching
-- [x] Learning queue
-- [x] Claude Code integration ready
-
-### ✅ Phase 2.5: Local LLM Inference (COMPLETE)
-- [x] Qwen2.5-Coder-7B (89 tok/s)
-- [x] Qwen3-8B (74 tok/s)
-- [x] ROCm GPU acceleration
-- [x] Multi-model serving
-
-### ✅ Phase 2.7: Dual-Mode Access (COMPLETE) 🔥
-- [x] HTTP API server (FastAPI/Uvicorn)
-- [x] RESTful endpoints for all operations
-- [x] Systemd service (auto-start on boot)
-- [x] Python client (`hivemind_client.py`)
-- [x] Interactive API docs (Swagger UI)
-- [x] Cross-tool context sharing
-- [x] Open Interpreter integration ready
-
-### ✅ Phase 4: Learning Pipeline (COMPLETE) 🧠
-- [x] LoRA fine-tuning pipeline (PyTorch 2.9.1 + ROCm 7.12)
-- [x] 10K+ foundation training dataset
-- [x] Qwen2.5-0.5B validation (loss: 0.34, 9 min)
-- [x] Qwen2.5-Coder-7B training (loss: 0.30, 1h 43min)
-- [x] GGUF export with quantization (Q4_K_M, Q5_K_M, Q8_0)
-- [x] Benchmark system with metrics tracking
-
-### ✅ Phase 4.5: Smart Optimizer (COMPLETE) 🧠
-- [x] Auto hardware detection (VRAM, GPU arch, BF16, Flash Attn)
-- [x] Intelligent LoRA config (r, alpha based on model size)
-- [x] Dynamic batch sizing based on available VRAM
-- [x] Quality modes: fast / balanced / best
-- [x] TorchAO integration (int4/int8 quantization)
-- [x] Auto-select optimal export format
-
-### 🚧 Phase 5: DELL Integration (PLANNED)
-- [ ] Deploy llama-server on DELL (Alderlake + RDNA2 12GB)
-- [ ] Add DELL as replica nodes to cluster
-- [ ] Embedding service (sentence-transformers)
-- [ ] Multi-machine context sharing
-
-### 🔮 Phase 6: Continuous Learning (FUTURE)
-- [ ] Collect interaction data from learning queue
-- [ ] Scheduled re-training (weekly/monthly)
-- [ ] A/B model evaluation
-- [ ] Automated model deployment
-
----
-
-## 💪 Hardware
-
-### Current: BEAST
-- **GPU**: AMD R9700 XT (32GB VRAM, RDNA4 gfx1201)
-- **Storage**: 277 GB available
-- **Network**: < 3ms latency to NAS
-- **Role**: Primary workstation + cluster host
-
-### NAS: Netgear ReadyNAS
-- **CPU**: Intel Atom C3338 (2 cores @ 2.2GHz)
-- **RAM**: 1.8GB
-- **Storage**: 9.2 TB available
-- **Network**: Dual gigabit NICs
-- **Role**: Backup storage
-
-### Future: DELL
-- **CPU**: Alderlake Intel
-- **RAM**: 32GB DDR
-- **GPU**: RDNA2 12GB VRAM
-- **Role**: Inference node + cluster replica
-
----
-
-## 🧪 Testing
-
-### Run All Tests
-
-```bash
-cd /path/to/hive-mind
-source .venv/bin/activate
-python3 tests/test-hive-mind-stack.py
-```
-
-**Expected**: 8/8 tests pass ✅
-
-### Run Benchmarks
-
-```bash
-python3 tests/benchmark-hive-mind.py
-```
-
----
-
-## 🤝 Contributing
-
-Want to make Hive-Mind even better?
-
-1. Fork the repo
-2. Create a feature branch
-3. Commit your changes
-4. Push and open a Pull Request
-
----
-
-## 📝 License
-
-MIT License
-
----
-
-## 📊 Stats
-
-**Lines of Code**: ~3,500
-**Docker Containers**: 9 (6 Redis + 3 Sentinel)
-**Services Running**: 12 (Redis + HTTP API + LLMs)
-**Access Modes**: 2 (HTTP API + MCP Protocol)
-**Development Time**: 12 days of continuous evolution (2026-02-01 → ongoing)
-**Status**: 🔥 DUAL-MODE PRODUCTION READY 🔥
-
----
-
-## 🐝 Why "Hive-Mind"?
-
-Because like a bee hive:
-- 🐝 **Distributed**: Multiple workers collaborating
-- 🍯 **Sweet**: Fast, efficient, production-ready
-- 👑 **Organized**: Clear roles (masters, replicas, sentinels)
-- 🔄 **Resilient**: Auto-failover when workers fail
-- 📚 **Memory**: Collective knowledge that persists
-- 🔌 **Universal**: Multiple access points (HTTP + MCP)
-- 🤝 **Collaborative**: Open Interpreter + Claude Code sharing context
-
-Plus, it sounds cool. 😎
+MIT
 
 ---
 
 <div align="center">
 
-**Built with ❤️ and a lot of ☕**
+**49 commits** · **7,500+ lines of Python** · **23 source files** · **4 systemd services**
 
-**Status**: ✅ PRODUCTION READY  
-**Performance**: 🔥 EXCELLENT  
-**Stability**: 🛡️ ROCK SOLID
+Built on Fedora Atomic (Kinoite 43) with ROCm 7.12 and PyTorch 2.10.0
 
-[⬆ Back to Top](#-hive-mind)
+[Back to Top](#hive-mind)
 
 </div>

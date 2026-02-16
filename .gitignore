@@ -62,6 +62,12 @@ models/
 *.bak
 *~
 
+# Fractal / test images (not project-related)
+fractal_*.py
+mandelbrot*.png
+julia_*.png
+nova_fractal_*.png
+
 # Learning Pipeline
 learning-pipeline/data/*
 !learning-pipeline/data/.gitkeep
