@@ -89,7 +89,7 @@ class EmbeddingManager:
 
     def find_relevant(self, query: str, facts: Dict[str, str],
                       cached_embeddings: Dict[str, bytes],
-                      top_k: int = 5, threshold: float = 0.3) -> RetrievalResult:
+                      top_k: int = 5, threshold: float = 0.45) -> RetrievalResult:
         """
         Find fact keys relevant to query using cosine similarity.
 
@@ -535,13 +535,13 @@ class HiveMindMCP:
                     result = self.embedding_manager.find_relevant(
                         query, facts, cached_embeddings,
                         top_k=embedding_config.get('top_k', 5),
-                        threshold=embedding_config.get('similarity_threshold', 0.3),
+                        threshold=embedding_config.get('similarity_threshold', 0.45),
                     )
                     if result.keys:
                         # Classify quality
-                        if result.top_score >= 0.5:
+                        if result.top_score >= 0.6:
                             quality = "good"
-                        elif result.top_score >= 0.3:
+                        elif result.top_score >= 0.45:
                             quality = "weak"
                         else:
                             quality = "weak"
