@@ -501,10 +501,10 @@ Consolidated all AI tools into single venv:
 
 Bashrc: `$AI_VENV`, `activate-ai`, `oih`
 
-### Future: Semantic Search
+### Future: Semantic Search → **DONE (Day 17)**
 
-Keyword matching works well but misses synonyms ("graphics card" vs "gpu").
-See [ROADMAP.md](ROADMAP.md) for semantic search plans using embedding models.
+Keyword matching worked well but missed synonyms ("graphics card" vs "gpu").
+Solved with embedding-based semantic search — see [Day 17](#day-17-semantic-embedding-rag-feb-15-2026).
 
 ---
 
@@ -624,6 +624,92 @@ Full cycle: **~4 minutes** from data to deployed model.
 
 ---
 
+## Day 17: Semantic Embedding RAG (Feb 15, 2026)
+
+### The Problem
+
+Keyword-based RAG filtering worked but had blind spots. Queries like "graphics card" wouldn't match the `gpu` fact because the keyword map only had literal terms. Every new concept required manually adding keyword->fact mappings. Time to make it smart.
+
+### The Solution: Embedding-Based Semantic Search
+
+Replaced the keyword-only approach with vector similarity search using `bge-small-en-v1.5` (384-dim, ~130MB). The embedding model runs on CPU to keep the GPU free for LLM inference.
+
+**Architecture:**
+```
+User Query
+    │
+    ▼
+┌──────────────┐     ┌──────────────────┐
+│ Embed Query  │     │ Redis: cached     │
+│ (bge-small)  │     │ fact_embeddings:* │
+└──────┬───────┘     └────────┬─────────┘
+       │                      │
+       ▼                      ▼
+┌──────────────────────────────────┐
+│  Cosine Similarity (dot product) │
+│  top_k=5, threshold=0.3         │
+└──────────────┬───────────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Filtered facts + core facts  │──▶ System Prompt
+│ (os, gpu, project always)    │
+└──────────────────────────────┘
+               │
+               ▼ (fallback if embeddings unavailable)
+┌──────────────────────────────┐
+│ Keyword map (legacy)          │
+└──────────────────────────────┘
+```
+
+### Key Design Decisions
+
+- **Lazy loading**: Embedding model loads on first use, not at startup (keeps MCP server fast to connect)
+- **Cached embeddings**: Pre-computed on `fact_store`, stored as base64 float32 arrays in Redis with 30-day TTL
+- **Bootstrap on connect**: On startup, checks for any facts missing embeddings and batch-computes them
+- **Redis pipelines**: Batch-retrieves all cached embeddings in one round-trip instead of N individual GETs
+- **Graceful fallback**: If the embedding model fails to load or embeddings are missing, falls back to the keyword map
+
+### Semantic Search Results
+
+| Query | Top Match | Score |
+|-------|-----------|-------|
+| "How do I build PyTorch for ROCm?" | rocm_version | 0.883 |
+| "What GPU do I have?" | gpu | 0.760 |
+| "How to benchmark GPU performance?" | gpu_benchmarking | 0.852 |
+| "How to tokenize text with hivemind?" | hivemind_tokenizer | 0.870 |
+| "Is this system immutable?" | package_management | 0.660 |
+| "How to export GGUF model?" | gguf_pinning | 0.744 |
+
+All 20 stored facts get embedded and cached. Query time is dominated by the model encode (~150ms on CPU), Redis retrieval is negligible with pipelines.
+
+### GPU Benchmarks (PyTorch 2.10 + ROCm 7.12)
+
+While testing, ran a proper GEMM benchmark to establish the R9700's actual capabilities:
+
+| Precision | Matrix Size | TFLOPS |
+|-----------|-------------|--------|
+| FP32 | 8192x8192 | 16.88 |
+| FP16 | 4096x4096 | **122.88** |
+| BF16 | 4096x4096 | **122.50** |
+
+Previous benchmark showed 3.98 TFLOPS — that was FP32 on undersized matrices. The R9700 actually does **120+ TFLOPS** in half precision with WMMA.
+
+### Nova Fractal (bonus)
+
+Generated a 5th-power Nova fractal on the GPU as a wallpaper:
+- Formula: `z = z - (z^5 - 1)/(5z^4) + c` where `c = 0.52 + 0.3i`
+- Orbit trap coloring with neon palette
+- 3840x2160, 400 iterations, 8.5 seconds on R9700
+
+### Files Changed
+
+- `mcp-server/server.py` — Added `EmbeddingManager` class, semantic search in `_get_facts_context()`, Redis pipeline optimization, embedding bootstrap
+- `config.yaml` — `embedding` section (model, device, top_k, similarity_threshold)
+- `requirements.txt` — `sentence-transformers>=2.2.0` (already listed for Phase 2, now active)
+
+---
+
 ## Credits
 
 Built with:
@@ -632,7 +718,7 @@ Built with:
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 14, 2026
+**Date**: February 15, 2026
 **Author**: hashcat
 
 ---
