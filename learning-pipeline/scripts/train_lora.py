@@ -64,9 +64,10 @@ def get_optimal_batch_size(overhead_percent: float = 0.20, min_batch: int = 1, m
         # Calculate usable memory (free minus overhead)
         usable_memory = free_memory * (1 - overhead_percent)
 
-        # Estimate memory per sample (empirical: ~40MB per sample for Qwen-0.5B with BF16)
-        # This is a conservative estimate based on model size and precision
-        memory_per_sample = 40 * 1024 * 1024  # 40 MB in bytes
+        # Estimate memory per sample for Qwen2.5-7B with LoRA in BF16
+        # Model weights ~14GB + LoRA + optimizer states + activations/gradients
+        # Empirical: ~2GB per sample at sequence length 512-1024
+        memory_per_sample = 2 * 1024 * 1024 * 1024  # 2 GB in bytes
 
         # Calculate batch size
         estimated_batch = int(usable_memory / memory_per_sample)

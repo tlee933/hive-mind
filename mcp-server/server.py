@@ -463,6 +463,7 @@ class HiveMindMCP:
                     'est_days_to_training': float(daemon_stats.get('est_days_to_training', -1)),
                     'hours_since_training': float(daemon_stats.get('hours_since_training', -1)),
                     'last_cycle': daemon_stats.get('last_cycle', ''),
+                    'model_version': daemon_stats.get('model_version', ''),
                     'progress_pct': round(filtered / threshold * 100, 1) if threshold > 0 else 0,
                 }
         except Exception:

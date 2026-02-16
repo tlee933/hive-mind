@@ -42,6 +42,7 @@ class ModelVersion:
     status: str  # 'training', 'ready', 'deployed', 'retired'
     eval_score: Optional[float] = None
     deployed_at: Optional[str] = None
+    semantic_version: Optional[str] = None
 
 
 class ModelRegistry:
@@ -174,6 +175,9 @@ class ContinuousLearner:
         self.collected_ids_file = self.data_dir / ".collected_ids"
         self.last_training_file = self.data_dir / ".last_training"
 
+        # Model semantic version file
+        self.model_version_file = self.base_dir / "learning-pipeline" / "MODEL_VERSION"
+
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def _connect_redis(self):
@@ -198,6 +202,24 @@ class ContinuousLearner:
                 password=redis_config['password'],
                 decode_responses=True
             )
+
+    def _get_model_version(self) -> str:
+        """Read current semantic model version from MODEL_VERSION file"""
+        if self.model_version_file.exists():
+            return self.model_version_file.read_text().strip()
+        return "0.9.0"
+
+    def _bump_model_version(self) -> str:
+        """Bump patch version after successful deploy (0.9.0 -> 0.9.1)"""
+        current = self._get_model_version()
+        parts = current.split('.')
+        if len(parts) != 3:
+            parts = ['0', '9', '0']
+        parts[2] = str(int(parts[2]) + 1)
+        new_version = '.'.join(parts)
+        self.model_version_file.write_text(new_version + '\n')
+        logger.info(f"Model version bumped: {current} -> {new_version}")
+        return new_version
 
     def _get_collected_ids(self) -> set:
         """Get IDs of already collected interactions"""
@@ -453,6 +475,7 @@ class ContinuousLearner:
                 'est_days_to_training': str(est_days),
                 'hours_since_training': str(hours_since_training),
                 'last_cycle': datetime.now().isoformat(),
+                'model_version': self._get_model_version(),
             }
 
             self.redis.hset('learning:daemon_stats', mapping=stats)
@@ -522,7 +545,7 @@ class ContinuousLearner:
         logger.info(f"  Base model: {base_model}")
         logger.info(f"  Training samples: {num_samples}")
 
-        # Create version record
+        # Create version record (semantic version assigned on deploy)
         version = ModelVersion(
             version=version_id,
             created_at=datetime.now().isoformat(),
@@ -532,6 +555,7 @@ class ContinuousLearner:
             gguf_path="",
             lora_path=str(version_dir / "lora"),
             status='training',
+            semantic_version=self._get_model_version(),
         )
         self.registry.add_version(version)
 
@@ -671,8 +695,11 @@ class ContinuousLearner:
             import requests
             resp = requests.get("http://localhost:8089/health", timeout=10)
             if resp.status_code == 200:
+                # Bump semantic version and stamp on this version
+                new_semver = self._bump_model_version()
+                version.semantic_version = new_semver
                 self.registry.set_deployed(version.version)
-                logger.info(f"✅ Deployed version {version.version}")
+                logger.info(f"Deployed HiveCoder-7B v{new_semver} ({version.version})")
                 return True
 
         except Exception as e:
