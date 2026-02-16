@@ -199,6 +199,17 @@ async def fact_get(body: FactGetRequest, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/rag/suggestions")
+async def rag_suggestions(request: Request, limit: int = 20):
+    """Analyze missed RAG queries and suggest new facts to add"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.fact_suggestions(limit=limit)
+    except Exception as e:
+        logger.error(f"Error in rag_suggestions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/fact/delete")
 async def fact_delete(body: FactDeleteRequest, request: Request):
     """Delete a stored fact"""

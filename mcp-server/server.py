@@ -14,7 +14,8 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -32,6 +33,14 @@ logging.basicConfig(
     stream=sys.stderr  # Important: log to stderr so stdout is clean for MCP protocol
 )
 logger = logging.getLogger("hive-mind-mcp")
+
+
+@dataclass
+class RetrievalResult:
+    """Result from semantic embedding search."""
+    keys: Set[str]
+    scores: List[Tuple[str, float]] = field(default_factory=list)  # [(key, score), ...] sorted desc
+    top_score: float = 0.0
 
 
 class EmbeddingManager:
@@ -80,7 +89,7 @@ class EmbeddingManager:
 
     def find_relevant(self, query: str, facts: Dict[str, str],
                       cached_embeddings: Dict[str, bytes],
-                      top_k: int = 5, threshold: float = 0.3) -> Set[str]:
+                      top_k: int = 5, threshold: float = 0.3) -> RetrievalResult:
         """
         Find fact keys relevant to query using cosine similarity.
 
@@ -92,13 +101,13 @@ class EmbeddingManager:
             threshold: Min similarity score
 
         Returns:
-            Set of relevant fact keys
+            RetrievalResult with matched keys, all scores, and top score
         """
         import numpy as np
 
         self._ensure_model()
         if self.model is None:
-            return set()
+            return RetrievalResult(keys=set())
 
         query_emb = self.model.encode(query, normalize_embeddings=True)
 
@@ -116,7 +125,7 @@ class EmbeddingManager:
                 continue
 
         if not scores:
-            return set()
+            return RetrievalResult(keys=set())
 
         # Sort by score descending, take top_k above threshold
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -126,11 +135,13 @@ class EmbeddingManager:
         core_facts = {'operating_system', 'gpu', 'project'}
         relevant.update(key for key in core_facts if key in facts)
 
+        top_score = scores[0][1] if scores else 0.0
+
         if relevant:
             top_3 = scores[:3]
             logger.info(f"Semantic search: top matches = {[(k, f'{s:.3f}') for k, s in top_3]}")
 
-        return relevant
+        return RetrievalResult(keys=relevant, scores=scores, top_score=top_score)
 
 
 class HiveMindMCP:
@@ -415,6 +426,26 @@ class HiveMindMCP:
             except Exception:
                 llm_status = "offline"
 
+        # RAG retrieval stats
+        rag_retrieval = {}
+        try:
+            rag_stats = await self.redis_client.hgetall('rag:stats')
+            if rag_stats:
+                total = int(rag_stats.get('total', 0))
+                poor = int(rag_stats.get('poor_retrievals', 0))
+                missed_count = await self.redis_client.zcard('rag:missed_queries')
+                rag_retrieval = {
+                    'total': total,
+                    'hit_rate': round((total - poor) / total, 3) if total > 0 else None,
+                    'method_semantic': int(rag_stats.get('method_semantic', 0)),
+                    'method_keyword': int(rag_stats.get('method_keyword', 0)),
+                    'method_default': int(rag_stats.get('method_default', 0)),
+                    'poor_retrievals': poor,
+                    'missed_query_count': missed_count,
+                }
+        except Exception:
+            pass
+
         return {
             'redis_version': info.get('redis_version', 'unknown'),
             'connected_clients': info.get('connected_clients', 0),
@@ -425,6 +456,7 @@ class HiveMindMCP:
             'cluster_mode': self.config['redis'].get('cluster_mode', False),
             'llm_model': self.config.get('inference', {}).get('model', 'none'),
             'llm_status': llm_status,
+            'rag_retrieval': rag_retrieval,
         }
 
     # ========== Fact Storage (RAG) Methods ==========
@@ -500,19 +532,74 @@ class HiveMindMCP:
                 cached_embeddings = await self._get_cached_embeddings(facts.keys())
                 if cached_embeddings:
                     embedding_config = self.config.get('embedding', {})
-                    relevant_keys = self.embedding_manager.find_relevant(
+                    result = self.embedding_manager.find_relevant(
                         query, facts, cached_embeddings,
                         top_k=embedding_config.get('top_k', 5),
                         threshold=embedding_config.get('similarity_threshold', 0.3),
                     )
-                    if relevant_keys:
-                        filtered = {k: v for k, v in facts.items() if k in relevant_keys}
+                    if result.keys:
+                        # Classify quality
+                        if result.top_score >= 0.5:
+                            quality = "good"
+                        elif result.top_score >= 0.3:
+                            quality = "weak"
+                        else:
+                            quality = "weak"
+                        asyncio.create_task(self._log_retrieval(
+                            query=query, method="semantic", quality=quality,
+                            scores=result.scores[:5],
+                        ))
+                        filtered = {k: v for k, v in facts.items() if k in result.keys}
                         return self._format_facts(filtered)
             except Exception as e:
                 logger.warning(f"Semantic search failed, falling back to keywords: {e}")
 
         # Fallback: keyword matching
-        return self._keyword_filter(query, facts)
+        filtered_text, method = self._keyword_filter(query, facts)
+        quality = "fallback" if method == "keyword" else "miss"
+        asyncio.create_task(self._log_retrieval(
+            query=query, method=method, quality=quality, scores=[],
+        ))
+        return filtered_text
+
+    async def _log_retrieval(self, query: str, method: str, quality: str,
+                             scores: List[Tuple[str, float]]) -> None:
+        """Log retrieval event to Redis (non-blocking, fire-and-forget)."""
+        try:
+            pipe = self.redis_client.pipeline(transaction=False)
+
+            # Stream: full retrieval log
+            scores_str = json.dumps([(k, round(s, 4)) for k, s in scores[:5]]) if scores else "[]"
+            pipe.xadd('rag:retrieval_log', {
+                'query': query[:500],
+                'method': method,
+                'quality': quality,
+                'top_score': str(round(scores[0][1], 4)) if scores else "0",
+                'scores': scores_str,
+                'timestamp': datetime.now().isoformat(),
+            }, maxlen=5000, approximate=True)
+
+            # Hash: aggregate counters
+            pipe.hincrby('rag:stats', 'total', 1)
+            pipe.hincrby('rag:stats', f'method_{method}', 1)
+            if quality in ('weak', 'fallback', 'miss'):
+                pipe.hincrby('rag:stats', 'poor_retrievals', 1)
+
+            # Sorted set: missed/poor queries by frequency
+            if quality in ('fallback', 'miss'):
+                normalized = query.lower().strip()[:200]
+                pipe.zincrby('rag:missed_queries', 1, normalized)
+
+            await pipe.execute()
+
+            # Cap missed_queries sorted set at 500 entries
+            if quality in ('fallback', 'miss'):
+                count = await self.redis_client.zcard('rag:missed_queries')
+                if count > 500:
+                    await self.redis_client.zremrangebyrank('rag:missed_queries', 0, count - 501)
+
+        except Exception as e:
+            logger.warning(f"Failed to log retrieval: {e}")
 
     async def _get_cached_embeddings(self, keys) -> Dict[str, str]:
         """Retrieve cached embeddings from Redis for given fact keys."""
@@ -561,8 +648,14 @@ class HiveMindMCP:
 
         logger.info(f"Bootstrapped {len(missing)} fact embeddings")
 
-    def _keyword_filter(self, query: str, facts: Dict[str, str]) -> str:
-        """Filter facts using keyword matching (fallback when embeddings unavailable)."""
+    def _keyword_filter(self, query: str, facts: Dict[str, str]) -> Tuple[str, str]:
+        """
+        Filter facts using keyword matching (fallback when embeddings unavailable).
+
+        Returns:
+            Tuple of (formatted_facts_string, method) where method is
+            'keyword' if keywords matched or 'default' if only core facts returned.
+        """
         keyword_map = {
             'os': ['operating_system', 'system_type', 'desktop_environment'],
             'linux': ['operating_system', 'system_type', 'package_management'],
@@ -619,11 +712,14 @@ class HiveMindMCP:
             if keyword in query_lower:
                 relevant_keys.update(fact_keys)
 
-        if not relevant_keys:
+        if relevant_keys:
+            method = "keyword"
+        else:
             relevant_keys = {'operating_system', 'gpu', 'project'}
+            method = "default"
 
         filtered = {k: v for k, v in facts.items() if k in relevant_keys}
-        return self._format_facts(filtered)
+        return self._format_facts(filtered), method
 
     @staticmethod
     def _format_facts(facts: Dict[str, str]) -> str:
@@ -634,6 +730,91 @@ class HiveMindMCP:
         for key, value in facts.items():
             lines.append(f"- {key}: {value}")
         return "\n".join(lines)
+
+    # ========== RAG Suggestions ==========
+
+    async def fact_suggestions(self, limit: int = 20) -> Dict[str, Any]:
+        """
+        Analyze missed RAG queries and suggest new facts to add.
+
+        Reads rag:missed_queries sorted set, extracts topic words,
+        groups by frequency, and cross-references against existing facts.
+
+        Args:
+            limit: Max missed queries to return
+
+        Returns:
+            Dict with stats summary and suggested topics
+        """
+        # Stop words to filter out of topic extraction
+        stop_words = {
+            'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been',
+            'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+            'would', 'could', 'should', 'may', 'might', 'can', 'shall',
+            'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+            'as', 'into', 'through', 'during', 'before', 'after', 'above',
+            'below', 'between', 'out', 'off', 'over', 'under', 'again',
+            'further', 'then', 'once', 'here', 'there', 'when', 'where',
+            'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more',
+            'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only',
+            'own', 'same', 'so', 'than', 'too', 'very', 'just', 'because',
+            'but', 'and', 'or', 'if', 'while', 'about', 'up', 'what',
+            'which', 'who', 'whom', 'this', 'that', 'these', 'those',
+            'am', 'it', 'its', 'i', 'me', 'my', 'myself', 'we', 'our',
+            'you', 'your', 'he', 'him', 'his', 'she', 'her', 'they',
+            'them', 'their', 'write', 'make', 'use', 'help', 'tell',
+            'give', 'show', 'explain', 'describe', 'please',
+        }
+
+        # Get stats
+        stats_raw = await self.redis_client.hgetall('rag:stats') or {}
+        stats = {k: int(v) for k, v in stats_raw.items()}
+        total = stats.get('total', 0)
+        poor = stats.get('poor_retrievals', 0)
+
+        # Get top missed queries (highest frequency first)
+        missed_raw = await self.redis_client.zrevrange(
+            'rag:missed_queries', 0, limit - 1, withscores=True
+        )
+
+        # Get existing fact keys for cross-reference
+        existing_keys = set(await self.redis_client.hkeys('facts:system'))
+
+        # Extract topic words from missed queries
+        topic_counts: Dict[str, float] = {}
+        missed_queries = []
+        for query_text, freq in missed_raw:
+            missed_queries.append({'query': query_text, 'count': int(freq)})
+            words = query_text.split()
+            for word in words:
+                word_clean = word.strip('?.,!:;"\'()[]{}').lower()
+                if len(word_clean) >= 3 and word_clean not in stop_words:
+                    topic_counts[word_clean] = topic_counts.get(word_clean, 0) + freq
+
+        # Sort topics by frequency, filter out those already covered by facts
+        topics_sorted = sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)
+        suggested_topics = []
+        for topic, score in topics_sorted[:30]:
+            covered = topic in existing_keys or any(topic in k for k in existing_keys)
+            suggested_topics.append({
+                'topic': topic,
+                'score': int(score),
+                'covered_by_existing_fact': covered,
+            })
+
+        return {
+            'stats': {
+                'total_retrievals': total,
+                'poor_retrievals': poor,
+                'hit_rate': round((total - poor) / total, 3) if total > 0 else None,
+                'method_semantic': stats.get('method_semantic', 0),
+                'method_keyword': stats.get('method_keyword', 0),
+                'method_default': stats.get('method_default', 0),
+                'missed_query_count': len(missed_raw),
+            },
+            'missed_queries': missed_queries,
+            'suggested_topics': [t for t in suggested_topics if not t['covered_by_existing_fact']],
+        }
 
     # ========== LLM Inference Methods ==========
 
@@ -1040,6 +1221,20 @@ async def main():
                     },
                     "required": ["key"]
                 }
+            ),
+            Tool(
+                name="fact_suggestions",
+                description="Analyze missed RAG queries and suggest new facts to add. Shows retrieval stats, frequently missed queries, and uncovered topic areas.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "number",
+                            "description": "Max missed queries to return (default: 20)",
+                            "default": 20
+                        }
+                    }
+                }
             )
         ]
 
@@ -1114,6 +1309,10 @@ async def main():
             elif name == "fact_delete":
                 result = await hive_mind.fact_delete(
                     key=arguments["key"]
+                )
+            elif name == "fact_suggestions":
+                result = await hive_mind.fact_suggestions(
+                    limit=arguments.get("limit", 20)
                 )
             else:
                 result = {"error": f"Unknown tool: {name}"}
