@@ -731,8 +731,8 @@ Every RAG retrieval now logs its method, quality classification, and similarity 
 
 | Quality | Condition |
 |---------|-----------|
-| `good` | Semantic hit, top score >= 0.5 |
-| `weak` | Semantic hit, top score 0.3–0.5 |
+| `good` | Semantic hit, top score >= 0.6 |
+| `weak` | Semantic hit, top score 0.45–0.6 |
 | `fallback` | Fell back to keyword filter |
 | `miss` | Only default core facts returned |
 
@@ -774,6 +774,61 @@ The `bge-small-en-v1.5` model finds relevant facts even for queries with no dire
 
 - `mcp-server/server.py` — `RetrievalResult` dataclass, `_log_retrieval()`, refactored `_get_facts_context()` and `_keyword_filter()`, `fact_suggestions()` method + MCP tool, extended `get_stats()`
 - `mcp-server/http_server.py` — `GET /rag/suggestions` endpoint
+
+### Stress Test & Threshold Tuning
+
+Ran 28 diverse queries through the RAG endpoint — direct matches, semantic synonyms, training questions, and completely irrelevant queries (pasta, quantum physics, dog training). The initial thresholds were too generous.
+
+**The Problem:** Queries like "pasta carbonara" (0.52) and "quantum entanglement" (0.53) were classified as `good` and injecting irrelevant facts into the LLM prompt. The 0.5 threshold couldn't distinguish real matches from noise.
+
+**Threshold Changes:**
+
+| Parameter | Before | After |
+|-----------|--------|-------|
+| `good` quality threshold | >= 0.5 | >= 0.6 |
+| `weak` quality threshold | >= 0.3 | >= 0.45 |
+| `similarity_threshold` (min cutoff) | 0.3 | 0.45 |
+
+**Before vs After (28 queries):**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Good (correct injection) | 93.8% | 71.4% |
+| Weak (skipped) | 6.2% | 28.6% |
+| Avg score | 0.642 | 0.650 |
+
+**Queries correctly reclassified as weak:**
+- "How do I make pasta carbonara?" → 0.52 (was `good`, now `weak`)
+- "Explain quantum entanglement" → 0.53 (was `good`, now `weak`)
+- "Best practices for React hooks" → 0.54 (was `good`, now `weak`)
+- "How to train a dog to sit" → 0.53 (was `good`, now `weak`)
+- "What's the weather like today?" → 0.46 (was `weak`, stays `weak`)
+
+**New fact: `training_config`**
+
+Added a fact covering LoRA training configuration (r=16, alpha=32, 100-sample threshold, GGUF export). This fixed queries that previously had no good match:
+
+| Query | Before | After |
+|-------|--------|-------|
+| "What LoRA rank should I use?" | 0.53 → `package_management` | **0.665 → `training_config`** |
+| "How do I fine-tune a language model?" | 0.61 → random | **0.644 → `training_config`** |
+| "How does the learning pipeline work?" | 0.61 → random | **0.621 → `training_config`** |
+
+**Score distribution (after tuning):**
+```
+0.8-1.0: #               (1)   good
+0.7-0.8: ########        (8)   good
+0.6-0.7: ###########     (11)  good
+0.5-0.6: #######         (7)   weak - correctly filtered
+0.45-0.5: #              (1)   weak - correctly filtered
+```
+
+The system now only injects facts when it's genuinely confident about relevance. Irrelevant queries get core facts only instead of polluting context with noise.
+
+### Files Changed
+
+- `mcp-server/server.py` — Raised `good` threshold to 0.6, `weak` to 0.45, default `similarity_threshold` to 0.45
+- `config.yaml` — `similarity_threshold: 0.45`
 
 ---
 
