@@ -396,6 +396,71 @@ class ContinuousLearner:
         logger.info(f"Training not needed: {total_samples} samples (need {self.min_samples_for_training})")
         return False
 
+    def _publish_stats(self):
+        """Publish learning stats to Redis for get_stats visibility"""
+        try:
+            queue_name = self.config['learning']['queue_name']
+
+            # Raw queue length (total entries in Redis stream)
+            try:
+                raw_queue = self.redis.xlen(queue_name)
+            except Exception:
+                raw_queue = 0
+
+            # Filtered samples (training-ready, on disk)
+            filtered_samples = 0
+            for batch_file in self.data_dir.glob("batch_*.jsonl"):
+                with open(batch_file, 'r') as f:
+                    filtered_samples += sum(1 for _ in f)
+
+            # Filter rate
+            collected_ids = self._get_collected_ids()
+            collected_count = len(collected_ids)
+            filter_rate = round(filtered_samples / collected_count, 2) if collected_count > 0 else 0.0
+
+            # Samples needed
+            samples_needed = max(0, self.min_samples_for_training - filtered_samples)
+
+            # Accumulation rate: samples per day based on batch file timestamps
+            batch_files = sorted(self.data_dir.glob("batch_*.jsonl"))
+            samples_per_day = 0.0
+            if len(batch_files) >= 2:
+                first_mtime = batch_files[0].stat().st_mtime
+                last_mtime = batch_files[-1].stat().st_mtime
+                days_span = (last_mtime - first_mtime) / 86400
+                if days_span > 0.01:
+                    samples_per_day = round(filtered_samples / days_span, 1)
+
+            # Estimated days to training
+            est_days = -1.0
+            if samples_needed > 0 and samples_per_day > 0:
+                est_days = round(samples_needed / samples_per_day, 1)
+
+            # Hours since last training
+            last_time = self._get_last_training_time()
+            hours_since_training = -1.0
+            if last_time:
+                hours_since_training = round((datetime.now() - last_time).total_seconds() / 3600, 1)
+
+            stats = {
+                'raw_queue': str(raw_queue),
+                'collected': str(collected_count),
+                'filtered_samples': str(filtered_samples),
+                'filter_rate': str(filter_rate),
+                'threshold': str(self.min_samples_for_training),
+                'samples_needed': str(samples_needed),
+                'samples_per_day': str(samples_per_day),
+                'est_days_to_training': str(est_days),
+                'hours_since_training': str(hours_since_training),
+                'last_cycle': datetime.now().isoformat(),
+            }
+
+            self.redis.hset('learning:daemon_stats', mapping=stats)
+            logger.info(f"Published stats: {filtered_samples}/{self.min_samples_for_training} samples, ~{samples_per_day}/day, est {est_days}d")
+
+        except Exception as e:
+            logger.error(f"Error publishing stats: {e}")
+
     def cleanup_old_versions(self):
         """Remove old model versions, keeping deployed + N previous"""
         continuous_dir = self.models_dir / "continuous"
@@ -634,17 +699,22 @@ class ContinuousLearner:
                 if training_data:
                     self.save_training_batch(training_data)
 
-        # 4. Check if we should train
+        # 4. Publish stats to Redis
+        self._publish_stats()
+
+        # 5. Check if we should train
         if self.should_train():
             version = self.train_new_version()
 
             if version and version.status == 'ready':
-                # 5. Export to GGUF
+                # 6. Export to GGUF
                 if self.export_to_gguf(version):
-                    # 6. Deploy
+                    # 7. Deploy
                     self.deploy_version(version)
-                    # 7. Cleanup old versions
+                    # 8. Cleanup old versions
                     self.cleanup_old_versions()
+                    # Update stats after deploy
+                    self._publish_stats()
 
         logger.info("Cycle complete")
 

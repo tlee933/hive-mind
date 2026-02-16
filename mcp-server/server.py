@@ -446,6 +446,28 @@ class HiveMindMCP:
         except Exception:
             pass
 
+        # Learning pipeline stats (published by daemon)
+        learning = {}
+        try:
+            daemon_stats = await self.redis_client.hgetall('learning:daemon_stats')
+            if daemon_stats:
+                filtered = int(daemon_stats.get('filtered_samples', 0))
+                threshold = int(daemon_stats.get('threshold', 50))
+                learning = {
+                    'raw_queue': int(daemon_stats.get('raw_queue', 0)),
+                    'filtered_samples': filtered,
+                    'filter_rate': float(daemon_stats.get('filter_rate', 0)),
+                    'threshold': threshold,
+                    'samples_needed': int(daemon_stats.get('samples_needed', 0)),
+                    'samples_per_day': float(daemon_stats.get('samples_per_day', 0)),
+                    'est_days_to_training': float(daemon_stats.get('est_days_to_training', -1)),
+                    'hours_since_training': float(daemon_stats.get('hours_since_training', -1)),
+                    'last_cycle': daemon_stats.get('last_cycle', ''),
+                    'progress_pct': round(filtered / threshold * 100, 1) if threshold > 0 else 0,
+                }
+        except Exception:
+            pass
+
         return {
             'redis_version': info.get('redis_version', 'unknown'),
             'connected_clients': info.get('connected_clients', 0),
@@ -457,6 +479,7 @@ class HiveMindMCP:
             'llm_model': self.config.get('inference', {}).get('model', 'none'),
             'llm_status': llm_status,
             'rag_retrieval': rag_retrieval,
+            'learning_pipeline': learning,
         }
 
     # ========== Fact Storage (RAG) Methods ==========
