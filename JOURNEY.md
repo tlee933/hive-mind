@@ -830,6 +830,63 @@ The system now only injects facts when it's genuinely confident about relevance.
 - `mcp-server/server.py` — Raised `good` threshold to 0.6, `weak` to 0.45, default `similarity_threshold` to 0.45
 - `config.yaml` — `similarity_threshold: 0.45`
 
+### Scaling to 31 Facts
+
+Added 10 new system facts to broaden RAG coverage:
+
+| Fact | Content |
+|------|---------|
+| `cpu` | Ryzen 9 5900X, 12C/24T, Zen 3 |
+| `memory` | 32GB DDR4, separate from 32GB VRAM |
+| `storage` | 2x NVMe — 952GB btrfs (OS) + 403GB ext4 (builds) |
+| `kernel` | Linux 6.18.5-200.fc43.x86_64 |
+| `containers` | Docker with 9 Redis containers, Podman 5.7.1, Toolbox, Flatpak |
+| `tailscale` | Mesh VPN at 100.107.161.22 |
+| `network` | 192.168.1.100/24 on enp5s0 |
+| `dev_tools` | Python 3.14.2, Git 2.52, Homebrew 5.0.14, llama.cpp |
+| `ujust` | Universal Blue command runner, ~40 recipes |
+| `universal_blue` | Aurora-DX based on Fedora Kinoite 43 |
+
+Re-ran the stress test with 40 queries (vs 28 before) — more diverse, targeting the new facts plus irrelevant queries.
+
+**v2 vs v3 comparison:**
+
+| Metric | v2 (21 facts) | v3 (31 facts) |
+|--------|---------------|---------------|
+| Queries tested | 28 | 40 |
+| Good | 71.4% | **87.5%** |
+| Weak | 28.6% | **12.5%** |
+| Avg score | 0.650 | **0.703** |
+| Median | 0.639 | **0.734** |
+
+**New fact highlights:**
+```
+"What CPU do I have?"                 → 0.794  cpu
+"How many cores does my processor?"   → 0.820  cpu
+"How much RAM is installed?"          → 0.786  memory
+"How much disk space is left?"        → 0.720  storage
+"What kernel version?"                → 0.750  kernel
+"What containers are running?"        → 0.745  containers
+"What is my Tailscale IP?"            → 0.772  tailscale
+"What ujust commands are available?"  → 0.797  ujust
+"What is Universal Blue?"             → 0.747  universal_blue
+"How do I benchmark GPU performance?" → 0.832  gpu_benchmarking
+```
+
+**All 5 irrelevant queries correctly weak:** pizza (0.40), Minecraft (0.54), France (0.44), blockchain (0.56), tomatoes (0.52). Zero false-positive fact injection.
+
+**Score distribution shifted right:**
+```
+0.8-1.0: ##                    (2)   good
+0.7-0.8: ######################  (22)  good
+0.6-0.7: ###########            (11)  good
+0.5-0.6: ###                    (3)   weak
+0.45-0.5:                       (0)   weak
+<0.45:   ##                    (2)   weak
+```
+
+The bulk of legitimate queries now land in the 0.7–0.8 band, well above the 0.6 good threshold. The system reliably distinguishes relevant queries from noise.
+
 ---
 
 ## Credits
