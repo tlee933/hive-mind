@@ -2,6 +2,7 @@
 
 > **Distributed AI Memory System with Semantic RAG, Continuous Learning, and Dual LLM Inference**
 
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](VERSION)
 [![Redis](https://img.shields.io/badge/Redis_Cluster-7.4.7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![ROCm](https://img.shields.io/badge/ROCm-7.12-FF6600?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)

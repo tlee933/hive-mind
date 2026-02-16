@@ -136,7 +136,7 @@ Connected HiveCoder-7B directly into the hive-mind architecture:
 │                                                                  │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
 │  │ Claude Code │───▶│ MCP Server  │───▶│ HiveCoder-7B        │  │
-│  │ (Opus 4.5)  │    │ (Python)    │    │ (llama-server:8089) │  │
+│  │ (Opus 4.6)  │    │ (Python)    │    │ (llama-server:8089) │  │
 │  └─────────────┘    └──────┬──────┘    └─────────────────────┘  │
 │                            │                                     │
 │                            ▼                                     │

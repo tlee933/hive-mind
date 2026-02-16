@@ -12,7 +12,17 @@ import os
 import sys
 from typing import Optional, List, Dict, Any
 
+from pathlib import Path
 import uvicorn
+
+def _read_version():
+    vf = Path(__file__).resolve().parent.parent / "VERSION"
+    try:
+        return vf.read_text().strip()
+    except FileNotFoundError:
+        return "0.0.0"
+
+__version__ = _read_version()
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -108,7 +118,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Hive-Mind HTTP API",
     description="Distributed AI Memory System - HTTP Interface",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -127,7 +137,7 @@ async def root():
     return {
         "service": "Hive-Mind HTTP API",
         "status": "operational",
-        "version": "0.1.0"
+        "version": __version__
     }
 
 
