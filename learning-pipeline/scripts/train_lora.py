@@ -22,7 +22,8 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    EarlyStoppingCallback,
 )
 from datasets import load_dataset
 from peft import (
@@ -104,12 +105,21 @@ class LoRATrainer:
         num_epochs: int = 3,
         batch_size: int = 4,
         gradient_accumulation_steps: int = 4,
+        val_split: float = 0.2,
+        early_stopping_patience: int = 2,
+        min_samples_for_split: int = 10,
     ):
         """Initialize LoRA trainer"""
         self.model_name = model_name
         self.dataset_path = Path(dataset_path)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Validation config
+        self.val_split = val_split
+        self.early_stopping_patience = early_stopping_patience
+        self.min_samples_for_split = min_samples_for_split
+        self.eval_dataset = None
 
         # LoRA config
         self.lora_config = LoraConfig(
@@ -139,6 +149,10 @@ class LoRATrainer:
             report_to="tensorboard",
             logging_dir=str(self.output_dir / "logs"),
             remove_unused_columns=False,  # Keep 'text' column for on-the-fly tokenization
+            eval_strategy="no",  # Updated to "epoch" if val split is created
+            load_best_model_at_end=False,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
         )
 
         logger.info(f"Initialized trainer for model: {model_name}")
@@ -206,9 +220,24 @@ class LoRATrainer:
             return {'text': full_text}
 
         # Just format text, don't tokenize yet (will tokenize on-the-fly)
-        self.train_dataset = dataset.map(format_instruction, remove_columns=dataset.column_names)
+        formatted = dataset.map(format_instruction, remove_columns=dataset.column_names)
 
-        logger.info(f"Dataset prepared: {len(self.train_dataset)} formatted examples (tokenization on-the-fly)")
+        # Train/validation split
+        if self.val_split > 0 and len(formatted) >= self.min_samples_for_split:
+            split = formatted.train_test_split(test_size=self.val_split, seed=42)
+            self.train_dataset = split['train']
+            self.eval_dataset = split['test']
+            self.training_args.eval_strategy = "epoch"
+            if self.early_stopping_patience > 0:
+                self.training_args.load_best_model_at_end = True
+            logger.info(f"Dataset split: {len(self.train_dataset)} train, {len(self.eval_dataset)} val")
+        else:
+            self.train_dataset = formatted
+            self.eval_dataset = None
+            if self.val_split > 0:
+                logger.info(f"Too few samples ({len(formatted)}) for val split (need {self.min_samples_for_split}), training on all data")
+
+        logger.info(f"Dataset prepared: {len(self.train_dataset)} training examples (tokenization on-the-fly)")
 
     def train(self):
         """Run training"""
@@ -229,11 +258,19 @@ class LoRATrainer:
 
         data_collator = collate_fn
 
+        # Build callbacks
+        callbacks = []
+        if self.eval_dataset and self.early_stopping_patience > 0:
+            callbacks.append(EarlyStoppingCallback(early_stopping_patience=self.early_stopping_patience))
+            logger.info(f"Early stopping enabled: patience={self.early_stopping_patience}")
+
         trainer = Trainer(
             model=self.model,
             args=self.training_args,
             train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
             data_collator=data_collator,
+            callbacks=callbacks,
         )
 
         # Train
@@ -243,14 +280,23 @@ class LoRATrainer:
         logger.info("Saving model...")
         trainer.save_model()
 
+        # Collect metrics
+        metrics = dict(train_result.metrics)
+
+        # Run evaluation if we have a val set
+        if self.eval_dataset:
+            eval_metrics = trainer.evaluate()
+            metrics.update(eval_metrics)
+            logger.info(f"Eval loss: {eval_metrics.get('eval_loss', 'N/A')}")
+
         # Save metrics
         metrics_file = self.output_dir / "training_metrics.json"
         with open(metrics_file, 'w') as f:
-            json.dump(train_result.metrics, f, indent=2)
+            json.dump(metrics, f, indent=2)
 
         logger.info(f"✅ Training complete! Model saved to {self.output_dir}")
 
-        return train_result.metrics
+        return metrics
 
     def run(self):
         """Run full training pipeline"""
@@ -286,6 +332,12 @@ def main():
     parser.add_argument('--grad-accum', type=int, default=4, help='Gradient accumulation steps')
     parser.add_argument('--vram-overhead', type=float, default=0.20,
                        help='VRAM overhead percentage to reserve (default 0.20 = 20%%)')
+    parser.add_argument('--val-split', type=float, default=0.2,
+                       help='Validation split ratio (default 0.2, 0 to disable)')
+    parser.add_argument('--early-stopping-patience', type=int, default=2,
+                       help='Early stopping patience in epochs (default 2, 0 to disable)')
+    parser.add_argument('--min-samples-for-split', type=int, default=10,
+                       help='Minimum samples required to create a val split (default 10)')
 
     args = parser.parse_args()
 
@@ -311,6 +363,9 @@ def main():
         num_epochs=args.epochs,
         batch_size=batch_size,
         gradient_accumulation_steps=args.grad_accum,
+        val_split=args.val_split,
+        early_stopping_patience=args.early_stopping_patience,
+        min_samples_for_split=args.min_samples_for_split,
     )
 
     metrics = trainer.run()

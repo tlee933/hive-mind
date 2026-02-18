@@ -13,6 +13,7 @@ import shutil
 import hashlib
 import argparse
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -484,6 +485,123 @@ class ContinuousLearner:
         except Exception as e:
             logger.error(f"Error publishing stats: {e}")
 
+    def _run_systemctl(self, action: str, service: str, user_service: bool = False) -> bool:
+        """Run systemctl action on a service. Returns True on success."""
+        if user_service:
+            cmd = ["systemctl", "--user", action, service]
+            env = os.environ.copy()
+            env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+        else:
+            cmd = ["sudo", "systemctl", action, service]
+            env = None
+
+        try:
+            subprocess.run(cmd, check=True, timeout=30, capture_output=True, env=env)
+            logger.info(f"systemctl {action} {service} ({'user' if user_service else 'system'}): OK")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"systemctl {action} {service} failed: {e.stderr.decode().strip() if e.stderr else e}")
+            return False
+        except Exception as e:
+            logger.warning(f"systemctl {action} {service} error: {e}")
+            return False
+
+    def _is_service_active(self, service: str, user_service: bool = False) -> bool:
+        """Check if a systemd service is active."""
+        if user_service:
+            cmd = ["systemctl", "--user", "is-active", "--quiet", service]
+            env = os.environ.copy()
+            env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+        else:
+            cmd = ["sudo", "systemctl", "is-active", "--quiet", service]
+            env = None
+
+        try:
+            result = subprocess.run(cmd, timeout=10, env=env)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _check_vram_used(self) -> float:
+        """Check GPU VRAM usage in GB. Returns -1 on error."""
+        try:
+            result = subprocess.run(
+                ["rocm-smi", "--showmeminfo", "vram", "--json"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                return -1.0
+            data = json.loads(result.stdout)
+            # rocm-smi JSON format: {"card0": {"VRAM Total Memory (B)": ..., "VRAM Total Used Memory (B)": ...}}
+            for card, info in data.items():
+                used = int(info.get("VRAM Total Used Memory (B)", 0))
+                return used / (1024 ** 3)
+            return -1.0
+        except Exception as e:
+            logger.warning(f"VRAM check failed: {e}")
+            return -1.0
+
+    def _notify(self, summary: str, body: str = "", urgency: str = "normal"):
+        """Send a KDE desktop notification and log to console."""
+        logger.info(f"[NOTIFY] {summary}{': ' + body if body else ''}")
+        try:
+            cmd = [
+                "notify-send",
+                "--app-name=HiveCoder",
+                f"--urgency={urgency}",
+                "--icon=brain",
+                summary,
+            ]
+            if body:
+                cmd.append(body)
+            env = os.environ.copy()
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/1000/bus"
+            subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            logger.debug(f"notify-send failed: {e}")
+
+    @contextmanager
+    def _gpu_training_context(self):
+        """Context manager that clears GPU for training and restores services after."""
+        stopped_llm = False
+        stopped_user_llama = False
+
+        # Stop hivecoder-llm (required — abort if fails)
+        if self._is_service_active("hivecoder-llm"):
+            self._notify("HiveCoder Training Starting", "Stopping LLM to free GPU for training")
+            if not self._run_systemctl("stop", "hivecoder-llm"):
+                raise RuntimeError("Failed to stop hivecoder-llm — aborting training to avoid OOM")
+            stopped_llm = True
+
+        # Stop user llama-server (optional, best-effort)
+        if self._is_service_active("llama-server", user_service=True):
+            logger.info("Stopping user llama-server...")
+            if self._run_systemctl("stop", "llama-server", user_service=True):
+                stopped_user_llama = True
+            else:
+                logger.warning("Could not stop user llama-server, continuing anyway")
+
+        # Wait for GPU memory to free
+        time.sleep(5)
+        vram_used = self._check_vram_used()
+        if vram_used >= 0:
+            logger.info(f"VRAM after clearing: {vram_used:.1f}GB used")
+
+        try:
+            yield
+        finally:
+            # Restart user llama-server if we stopped it
+            if stopped_user_llama:
+                logger.info("Restarting user llama-server...")
+                self._run_systemctl("start", "llama-server", user_service=True)
+
+            # Restart hivecoder-llm only if it's not already running
+            # (deploy_version restarts it on success; this handles the failure case)
+            if stopped_llm and not self._is_service_active("hivecoder-llm"):
+                logger.info("Restarting hivecoder-llm (fallback)...")
+                self._run_systemctl("start", "hivecoder-llm")
+                self._notify("HiveCoder LLM Restored", "LLM restarted with previous model (training/deploy did not complete)")
+
     def cleanup_old_versions(self):
         """Remove old model versions, keeping deployed + N previous"""
         continuous_dir = self.models_dir / "continuous"
@@ -567,8 +685,11 @@ class ContinuousLearner:
             "--model", base_model,
             "--dataset", str(training_file),
             "--output", str(version_dir / "lora"),
-            "--epochs", "1",  # Quick incremental training
+            "--epochs", "3",
             "--batch-size", "auto",
+            "--val-split", "0.2",
+            "--early-stopping-patience", "2",
+            "--min-samples-for-split", "10",
         ]
 
         try:
@@ -590,13 +711,20 @@ class ContinuousLearner:
             try:
                 metrics = json.loads(result.stdout.strip().split('\n')[-1])
                 version.final_loss = metrics.get('train_loss', 0.0)
-            except:
+                eval_loss = metrics.get('eval_loss')
+                if eval_loss is not None:
+                    version.eval_score = eval_loss
+            except Exception:
                 pass
 
             version.status = 'ready'
             self.registry._save()
 
-            logger.info(f"Training complete: {version_id} (loss: {version.final_loss:.4f})")
+            log_msg = f"Training complete: {version_id} (train_loss: {version.final_loss:.4f}"
+            if version.eval_score is not None:
+                log_msg += f", eval_loss: {version.eval_score:.4f}"
+            log_msg += ")"
+            logger.info(log_msg)
             return version
 
         except subprocess.TimeoutExpired:
@@ -699,7 +827,13 @@ class ContinuousLearner:
                 new_semver = self._bump_model_version()
                 version.semantic_version = new_semver
                 self.registry.set_deployed(version.version)
-                logger.info(f"Deployed HiveCoder-7B v{new_semver} ({version.version})")
+                loss_info = f"train_loss={version.final_loss:.4f}"
+                if version.eval_score is not None:
+                    loss_info += f", eval_loss={version.eval_score:.4f}"
+                self._notify(
+                    f"HiveCoder v{new_semver} Deployed",
+                    f"New model live ({version.training_samples} samples, {loss_info})",
+                )
                 return True
 
         except Exception as e:
@@ -731,17 +865,16 @@ class ContinuousLearner:
 
         # 5. Check if we should train
         if self.should_train():
-            version = self.train_new_version()
-
-            if version and version.status == 'ready':
-                # 6. Export to GGUF
-                if self.export_to_gguf(version):
-                    # 7. Deploy
-                    self.deploy_version(version)
-                    # 8. Cleanup old versions
-                    self.cleanup_old_versions()
-                    # Update stats after deploy
-                    self._publish_stats()
+            try:
+                with self._gpu_training_context():
+                    version = self.train_new_version()
+                    if version and version.status == 'ready':
+                        if self.export_to_gguf(version):
+                            self.deploy_version(version)
+                            self.cleanup_old_versions()
+                            self._publish_stats()
+            except RuntimeError as e:
+                logger.error(f"GPU orchestration failed: {e}")
 
         logger.info("Cycle complete")
 
@@ -797,7 +930,9 @@ def main():
             print(f"\nDeployed version: {deployed.version}")
             print(f"  Created: {deployed.created_at}")
             print(f"  Samples: {deployed.training_samples}")
-            print(f"  Loss: {deployed.final_loss:.4f}")
+            print(f"  Train loss: {deployed.final_loss:.4f}")
+            if deployed.eval_score is not None:
+                print(f"  Eval loss:  {deployed.eval_score:.4f}")
 
         print(f"\nTotal versions: {len(learner.registry.versions)}")
 
