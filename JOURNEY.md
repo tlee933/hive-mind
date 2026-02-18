@@ -1042,6 +1042,72 @@ This was also the first deploy to use the semantic versioning system added in th
 
 ---
 
+## Day 21 — GPU Orchestration, Validation, and Talos (February 17, 2026)
+
+### The Problems
+
+Two issues from Day 20:
+1. **OOM during training** — llama-server holds ~22GB VRAM, leaving nothing for PyTorch. Had to manually stop it before training.
+2. **Loss 0.0000** — 1 epoch on 32 samples = pure memorization. No validation split, no way to detect overfitting.
+
+### GPU Orchestration
+
+Added automatic GPU clearing to the continuous learning daemon. New context manager `_gpu_training_context()` handles the full lifecycle:
+
+- **Enter**: Stop `hivecoder-llm` (required — aborts if it fails), optionally stop user `llama-server`, wait 5s for VRAM to free, log usage via `rocm-smi`
+- **Exit**: Restart user `llama-server` if stopped, restart `hivecoder-llm` only if deploy didn't already bring it back
+
+Also added KDE desktop notifications (`notify-send`) so you know when training starts and when a new model goes live.
+
+### Multi-Epoch Validation
+
+Updated `train_lora.py` with proper training hygiene:
+
+- `--val-split 0.2` — 80/20 train/val split (skipped if <10 samples)
+- `--early-stopping-patience 2` — stops if val loss doesn't improve for 2 epochs
+- `--epochs 3` (was 1) — enough to actually learn, early stopping prevents overfit
+- Final `trainer.evaluate()` produces `eval_loss` in metrics JSON
+- `continuous_learning.py` parses and stores `eval_loss` in the model registry
+
+### Talos — New Project
+
+Realized the hive-mind backend + open-interpreter combo needed a proper desktop frontend. Born: **Talos** — a local-first desktop AI for Fedora Kinoite + KDE Plasma 6.
+
+Named after the bronze automaton from Greek mythology.
+
+**What it does:**
+- Agentic shell execution via HiveCoder-7B (through hive-mind HTTP API with RAG)
+- Obsidian vault integration — search, read, create, open notes from terminal
+- KDE desktop tools — notifications, clipboard (Wayland), Baloo file search
+- Bronze/amber themed TUI via Rich
+
+**Repo**: https://github.com/tlee933/talos
+
+```
+talos/
+├── cli.py       — click CLI (talos, talos ask, talos do, talos vault)
+├── agent.py     — Hive-Mind LLM client
+├── shell.py     — async command execution
+├── kde.py       — notify, clipboard, baloo
+├── obsidian.py  — vault search/read/create/open/daily/tags
+├── theme.py     — bronze automaton palette
+└── tui.py       — interactive REPL
+```
+
+Also set up Obsidian (Flatpak) with a vault at `~/Documents/Vault` containing system docs, project notes, and reference material. Wired into Talos config so `talos vault search pytorch` just works.
+
+### Housekeeping
+
+- Fixed git config: proper username, noreply email, SSH protocol for `gh`
+- `gh config set git_protocol ssh` — no more HTTPS credential dialogs
+
+### Files Changed (hive-mind)
+
+- `learning-pipeline/scripts/train_lora.py` — val split, early stopping, EarlyStoppingCallback, eval_loss in metrics
+- `learning-pipeline/scripts/continuous_learning.py` — GPU orchestration (_gpu_training_context, _run_systemctl, _is_service_active, _check_vram_used), desktop notifications (_notify), epochs=3, val-split args, eval_loss parsing
+
+---
+
 ## Credits
 
 Built with:
@@ -1050,7 +1116,7 @@ Built with:
 - 🔥 Pure determination
 
 **Status**: Production Ready
-**Date**: February 16, 2026
+**Date**: February 17, 2026
 **Author**: hashcat
 
 ---
