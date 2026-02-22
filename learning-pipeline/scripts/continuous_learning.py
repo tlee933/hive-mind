@@ -130,6 +130,11 @@ class QualityFilter:
                     filtered.append(item)
                 continue
 
+            # R1-distill responses always pass (knowledge distillation)
+            if item.get('model_source') == 'r1-distill':
+                filtered.append(item)
+                continue
+
             # Must be successful
             if not item.get('success', True):
                 continue
@@ -265,6 +270,18 @@ class ContinuousLearner:
                             'timestamp': msg_data.get('timestamp', ''),
                             'session_id': msg_data.get('session_id', ''),
                         }
+                    elif msg_data.get('type') == 'reasoning':
+                        # R1 reasoning interaction (knowledge distillation)
+                        interaction = {
+                            'id': msg_id,
+                            'type': 'reasoning',
+                            'input': msg_data.get('user_query', ''),
+                            'output': msg_data.get('response_summary', ''),
+                            'success': True,
+                            'model_source': msg_data.get('model_source', ''),
+                            'timestamp': msg_data.get('timestamp', ''),
+                            'session_id': msg_data.get('session_id', ''),
+                        }
                     else:
                         # Standard interaction
                         interaction = {
@@ -272,9 +289,10 @@ class ContinuousLearner:
                             'timestamp': msg_data.get('timestamp', ''),
                             'tool': msg_data.get('tool_used') or msg_data.get('tool', ''),
                             'input': msg_data.get('user_query') or msg_data.get('input', ''),
-                            'output': msg_data.get('result') or msg_data.get('output', ''),
+                            'output': msg_data.get('result') or msg_data.get('response_summary') or msg_data.get('output', ''),
                             'success': str(msg_data.get('success', 'true')).lower() in ('true', '1', 'yes'),
                             'session_id': msg_data.get('session_id', ''),
+                            'model_source': msg_data.get('model_source', ''),
                         }
                     new_interactions.append(interaction)
                     new_ids.append(msg_id)
@@ -310,6 +328,24 @@ class ContinuousLearner:
                     training_data.append(example)
                 continue
 
+            # Handle reasoning-type entries (R1 distillation)
+            if item.get('type') == 'reasoning':
+                user_input = item.get('input', '')
+                output = item.get('output', '')
+                if user_input and output:
+                    example = {
+                        'type': 'reasoning',
+                        'user_request': user_input,
+                        'output': output,
+                        'tool': 'reasoning',
+                        'command': '',
+                        'timestamp': item.get('timestamp', ''),
+                    }
+                    if item.get('model_source'):
+                        example['model_source'] = item['model_source']
+                    training_data.append(example)
+                continue
+
             if not item.get('success', True):
                 continue
 
@@ -325,6 +361,9 @@ class ContinuousLearner:
                 'output': output,
                 'timestamp': item.get('timestamp', ''),
             }
+            # Preserve model source for distillation tracking
+            if item.get('model_source'):
+                example['model_source'] = item['model_source']
             training_data.append(example)
 
         return training_data

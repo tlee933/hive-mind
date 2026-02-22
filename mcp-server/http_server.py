@@ -120,6 +120,27 @@ class WebSearchRequest(BaseModel):
     num_results: int = 5
 
 
+class ConversationSaveRequest(BaseModel):
+    conversation_id: str
+    title: str = ""
+    messages: List[Dict[str, Any]] = []
+    source: str = "tui"
+
+
+class ConversationLoadRequest(BaseModel):
+    conversation_id: str
+
+
+class ConversationListSavedRequest(BaseModel):
+    limit: int = 20
+    source: Optional[str] = None
+
+
+class ConversationExportRequest(BaseModel):
+    conversation_id: str
+    format: str = "markdown"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize Hive-Mind on startup, disconnect on shutdown."""
@@ -304,6 +325,64 @@ async def web_search(body: WebSearchRequest, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ========== Conversation Persistence Endpoints ==========
+
+@app.post("/conversation/save")
+async def conversation_save(body: ConversationSaveRequest, request: Request):
+    """Save a conversation for later retrieval"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.conversation_save(
+            conversation_id=body.conversation_id,
+            title=body.title,
+            messages=body.messages,
+            source=body.source,
+        )
+    except Exception as e:
+        logger.error(f"Error in conversation_save: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/conversation/load")
+async def conversation_load(body: ConversationLoadRequest, request: Request):
+    """Load a saved conversation"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.conversation_load(
+            conversation_id=body.conversation_id,
+        )
+    except Exception as e:
+        logger.error(f"Error in conversation_load: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/conversation/list")
+async def conversation_list_saved(body: ConversationListSavedRequest, request: Request):
+    """List saved conversations"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.conversation_list_saved(
+            limit=body.limit, source=body.source,
+        )
+    except Exception as e:
+        logger.error(f"Error in conversation_list: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/conversation/export")
+async def conversation_export(body: ConversationExportRequest, request: Request):
+    """Export a conversation as markdown or JSON"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.conversation_export(
+            conversation_id=body.conversation_id,
+            format=body.format,
+        )
+    except Exception as e:
+        logger.error(f"Error in conversation_export: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/tool/cache/get")
 async def tool_cache_get(body: ToolCacheGetRequest, request: Request):
     """Get cached tool output"""
@@ -435,28 +514,61 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str = "HiveCoder-7B"
     messages: List[ChatMessage]
-    max_tokens: Optional[int] = 512
-    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
     top_p: Optional[float] = 0.9
     stream: Optional[bool] = False
+    tools: Optional[List[dict]] = None
+    route_hint: Optional[str] = None
+    reason_mode: Optional[bool] = False
 
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(body: ChatCompletionRequest, request: Request):
     """
-    OpenAI-compatible chat completions endpoint with RAG injection.
+    OpenAI-compatible chat completions endpoint with RAG injection and model routing.
 
     Use this endpoint instead of llama-server directly to get
-    automatic RAG fact injection into the system prompt.
+    automatic RAG fact injection and intelligent model routing.
     """
+    from router import classify_query, RoutingDecision
+
     hive_mind = _hm(request)
 
     try:
-        # Extract user query for fact filtering
+        # Extract user query for fact filtering and routing
         user_query = None
         for msg in reversed(body.messages):
             if msg.role == "user":
                 user_query = msg.content
                 break
+
+        # --- Model routing ---
+        inference_config = hive_mind.config.get('inference', {})
+        models_config = inference_config.get('models', {})
+        default_model = inference_config.get('default_model', 'hivecoder-7b')
+
+        if models_config and user_query:
+            decision = classify_query(
+                user_query,
+                model_hint=body.route_hint,
+                reason_mode=bool(body.reason_mode),
+                available_models=models_config,
+                default_model=default_model,
+            )
+        else:
+            decision = RoutingDecision(
+                model_id=default_model,
+                reason="no_models_config",
+                confidence=1.0,
+            )
+
+        # Resolve endpoint from model config (with backward compat fallback)
+        model_cfg = models_config.get(decision.model_id, {})
+        endpoint = model_cfg.get('endpoint') or inference_config.get('endpoint', 'http://127.0.0.1:8089')
+        model_display = model_cfg.get('display_name', decision.model_id)
+        model_system_prompt = model_cfg.get('system_prompt', '')
+
+        logger.info(f"Routing to {model_display} ({decision.model_id}): {decision.reason}")
 
         # Get RAG facts (semantic search with keyword fallback)
         facts_context = await hive_mind._get_facts_context(query=user_query)
@@ -464,6 +576,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
         # Process messages - inject facts into system prompt
         messages = []
         system_found = False
+        default_system = model_system_prompt or "You are HiveCoder, a helpful AI coding assistant."
 
         for msg in body.messages:
             if msg.role == "system" and facts_context:
@@ -476,23 +589,35 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
         if not system_found and facts_context:
             messages.insert(0, {
                 "role": "system",
-                "content": f"You are HiveCoder, a helpful AI coding assistant.\n\n{facts_context}"
+                "content": f"{default_system}\n\n{facts_context}"
             })
 
-        # Forward to llama-server
-        inference_config = hive_mind.config.get('inference', {})
-        endpoint = inference_config.get('endpoint', 'http://127.0.0.1:8089')
+        # Use model-specific settings with request overrides
+        # Client explicit > model config > global default
+        max_tokens = body.max_tokens if body.max_tokens is not None else model_cfg.get('max_tokens', inference_config.get('default_max_tokens', 512))
+        temperature = body.temperature if body.temperature is not None else model_cfg.get('temperature', inference_config.get('default_temperature', 0.7))
 
         payload = {
             "model": body.model,
             "messages": messages,
-            "max_tokens": body.max_tokens,
-            "temperature": body.temperature,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
             "top_p": body.top_p,
             "stream": body.stream
         }
 
+        # Pass through tools array for function calling
+        if body.tools:
+            payload["tools"] = body.tools
+
         timeout = aiohttp.ClientTimeout(total=inference_config.get('timeout', 120))
+
+        # Routing headers to include in response
+        routing_headers = {
+            "X-Model-Used": model_display,
+            "X-Model-Id": decision.model_id,
+            "X-Routing-Reason": decision.reason,
+        }
 
         if body.stream:
             async def stream_generator():
@@ -514,6 +639,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
+                    **routing_headers,
                 }
             )
         else:
@@ -525,7 +651,15 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
                     if resp.status != 200:
                         error_text = await resp.text()
                         raise HTTPException(status_code=resp.status, detail=error_text)
-                    return await resp.json()
+                    result = await resp.json()
+                    # Inject routing info into response
+                    result["routing"] = {
+                        "model_id": decision.model_id,
+                        "model_display": model_display,
+                        "reason": decision.reason,
+                        "confidence": decision.confidence,
+                    }
+                    return result
 
     except aiohttp.ClientError as e:
         logger.error(f"Error connecting to LLM backend: {e}")
@@ -536,19 +670,34 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
 
 
 @app.get("/v1/models")
-async def openai_list_models():
-    """OpenAI-compatible models endpoint"""
-    return {
-        "object": "list",
-        "data": [
+async def openai_list_models(request: Request):
+    """OpenAI-compatible models endpoint — dynamically generated from config."""
+    hive_mind = _hm(request)
+    inference_config = hive_mind.config.get('inference', {})
+    models_config = inference_config.get('models', {})
+
+    if models_config:
+        data = [
+            {
+                "id": model_id,
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "hive-mind",
+                "capabilities": mcfg.get("capabilities", []),
+            }
+            for model_id, mcfg in models_config.items()
+        ]
+    else:
+        data = [
             {
                 "id": "HiveCoder-7B",
                 "object": "model",
                 "created": 1700000000,
-                "owned_by": "hive-mind"
+                "owned_by": "hive-mind",
             }
         ]
-    }
+
+    return {"object": "list", "data": data}
 
 
 def main():
