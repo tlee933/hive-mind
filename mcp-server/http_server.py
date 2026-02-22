@@ -98,6 +98,28 @@ class FactDeleteRequest(BaseModel):
     key: str
 
 
+class ConversationLogRequest(BaseModel):
+    role: str
+    content: str
+    source: str
+    timestamp: Optional[float] = None
+
+
+class ConversationRecentRequest(BaseModel):
+    limit: int = 20
+    source: Optional[str] = None
+
+
+class WebFetchRequest(BaseModel):
+    url: str
+    max_chars: int = 8000
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+    num_results: int = 5
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize Hive-Mind on startup, disconnect on shutdown."""
@@ -228,6 +250,57 @@ async def fact_delete(body: FactDeleteRequest, request: Request):
         return await hive_mind.fact_delete(key=body.key)
     except Exception as e:
         logger.error(f"Error in fact_delete: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/conversation/log")
+async def conversation_log(body: ConversationLogRequest, request: Request):
+    """Log a conversation message to the shared bridge"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.conversation_log(
+            role=body.role, content=body.content,
+            source=body.source, timestamp=body.timestamp
+        )
+    except Exception as e:
+        logger.error(f"Error in conversation_log: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/conversation/recent")
+async def conversation_recent(body: ConversationRecentRequest, request: Request):
+    """Retrieve recent shared conversation messages"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.conversation_recent(
+            limit=body.limit, source=body.source
+        )
+    except Exception as e:
+        logger.error(f"Error in conversation_recent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/web/fetch")
+async def web_fetch(body: WebFetchRequest, request: Request):
+    """Fetch a URL and extract readable text"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.web_fetch(url=body.url, max_chars=body.max_chars)
+    except Exception as e:
+        logger.error(f"Error in web_fetch: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/web/search")
+async def web_search(body: WebSearchRequest, request: Request):
+    """Search DuckDuckGo for results"""
+    hive_mind = _hm(request)
+    try:
+        return await hive_mind.web_search(
+            query=body.query, num_results=body.num_results
+        )
+    except Exception as e:
+        logger.error(f"Error in web_search: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

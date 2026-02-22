@@ -840,6 +840,163 @@ class HiveMindMCP:
             'suggested_topics': [t for t in suggested_topics if not t['covered_by_existing_fact']],
         }
 
+    # ========== Conversation Bridge Methods ==========
+
+    async def conversation_log(self, role: str, content: str, source: str,
+                               timestamp: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Log a conversation message to the shared bridge.
+
+        Args:
+            role: Message role ('user' or 'assistant')
+            content: Message content (truncated to 2000 chars)
+            source: Client source ('tui' or 'firefox')
+            timestamp: Unix timestamp (defaults to now)
+        """
+        ts = timestamp or time.time()
+        entry = json.dumps({
+            "role": role,
+            "content": content[:2000],
+            "source": source,
+            "timestamp": ts,
+        })
+        await self.redis_client.zadd("conversation:shared", {entry: ts})
+
+        # Cap at 200 entries
+        count = await self.redis_client.zcard("conversation:shared")
+        if count > 200:
+            await self.redis_client.zremrangebyrank("conversation:shared", 0, count - 201)
+
+        logger.info(f"Logged conversation: {role} from {source}")
+        return {"success": True, "role": role, "source": source}
+
+    async def conversation_recent(self, limit: int = 20,
+                                  source: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Retrieve recent shared conversation messages.
+
+        Args:
+            limit: Max messages to return
+            source: Optional filter by source ('tui' or 'firefox')
+        """
+        raw = await self.redis_client.zrevrange("conversation:shared", 0, limit * 2 - 1)
+        messages = []
+        for entry in reversed(raw):  # chronological order
+            try:
+                msg = json.loads(entry)
+                if source and msg.get("source") != source:
+                    continue
+                messages.append(msg)
+                if len(messages) >= limit:
+                    break
+            except json.JSONDecodeError:
+                continue
+
+        return {"success": True, "messages": messages}
+
+    # ========== Web Scraper Methods ==========
+
+    async def web_fetch(self, url: str, max_chars: int = 8000) -> Dict[str, Any]:
+        """
+        Fetch a URL and extract readable text content.
+
+        Args:
+            url: The URL to fetch
+            max_chars: Maximum characters to return
+        """
+        import re as _re
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            headers = {"User-Agent": "Talos/0.6 (local AI assistant)"}
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return {"error": f"HTTP {resp.status}", "url": url}
+                    html = await resp.text()
+
+            # Extract title
+            title_match = _re.search(r"<title[^>]*>(.*?)</title>", html, _re.IGNORECASE | _re.DOTALL)
+            title = title_match.group(1).strip() if title_match else ""
+
+            # Strip script and style tags
+            html = _re.sub(r"<script[^>]*>[\s\S]*?</script>", "", html, flags=_re.IGNORECASE)
+            html = _re.sub(r"<style[^>]*>[\s\S]*?</style>", "", html, flags=_re.IGNORECASE)
+
+            # Try article > main > body extraction
+            for tag in ("article", "main"):
+                match = _re.search(rf"<{tag}[^>]*>([\s\S]*?)</{tag}>", html, _re.IGNORECASE)
+                if match:
+                    html = match.group(1)
+                    break
+
+            # Strip all remaining tags
+            text = _re.sub(r"<[^>]+>", " ", html)
+            # Normalize whitespace
+            text = _re.sub(r"\s+", " ", text).strip()
+            # Truncate
+            text = text[:max_chars]
+
+            return {"title": title, "text": text, "url": url}
+
+        except asyncio.TimeoutError:
+            return {"error": "Request timed out", "url": url}
+        except Exception as e:
+            return {"error": str(e), "url": url}
+
+    async def web_search(self, query: str, num_results: int = 5) -> Dict[str, Any]:
+        """
+        Search DuckDuckGo and return results.
+
+        Args:
+            query: Search query
+            num_results: Max results to return
+        """
+        import re as _re
+        import urllib.parse
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            headers = {"User-Agent": "Talos/0.6 (local AI assistant)"}
+            encoded = urllib.parse.urlencode({"q": query})
+            url = f"https://html.duckduckgo.com/html/?{encoded}"
+
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return {"error": f"HTTP {resp.status}", "results": []}
+                    html = await resp.text()
+
+            # Parse results from DDG HTML
+            results = []
+            # DDG result links are in <a class="result__a" href="...">
+            pattern = r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>'
+            snippet_pattern = r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>'
+
+            links = _re.findall(pattern, html, _re.IGNORECASE | _re.DOTALL)
+            snippets = _re.findall(snippet_pattern, html, _re.IGNORECASE | _re.DOTALL)
+
+            for i, (href, title_html) in enumerate(links[:num_results]):
+                title = _re.sub(r"<[^>]+>", "", title_html).strip()
+                snippet = ""
+                if i < len(snippets):
+                    snippet = _re.sub(r"<[^>]+>", "", snippets[i]).strip()
+
+                # DDG wraps URLs in a redirect — extract actual URL
+                if "uddg=" in href:
+                    url_match = _re.search(r"uddg=([^&]+)", href)
+                    if url_match:
+                        href = urllib.parse.unquote(url_match.group(1))
+
+                results.append({"title": title, "url": href, "snippet": snippet})
+
+            return {"results": results}
+
+        except asyncio.TimeoutError:
+            return {"error": "Search timed out", "results": []}
+        except Exception as e:
+            return {"error": str(e), "results": []}
+
     # ========== LLM Inference Methods ==========
 
     async def llm_generate(self, prompt: str, mode: str = "code",
@@ -1259,6 +1416,88 @@ async def main():
                         }
                     }
                 }
+            ),
+            Tool(
+                name="conversation_log",
+                description="Log a conversation message to the shared bridge between TUI and Firefox.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "description": "Message role ('user' or 'assistant')"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Message content (truncated to 2000 chars)"
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Client source ('tui' or 'firefox')"
+                        },
+                        "timestamp": {
+                            "type": "number",
+                            "description": "Unix timestamp (optional, defaults to now)"
+                        }
+                    },
+                    "required": ["role", "content", "source"]
+                }
+            ),
+            Tool(
+                name="conversation_recent",
+                description="Retrieve recent shared conversation messages from the bridge.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "number",
+                            "description": "Max messages to return (default: 20)",
+                            "default": 20
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Filter by source ('tui' or 'firefox')"
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="web_fetch",
+                description="Fetch a URL and extract readable text content for context injection.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The URL to fetch"
+                        },
+                        "max_chars": {
+                            "type": "number",
+                            "description": "Maximum characters to return (default: 8000)",
+                            "default": 8000
+                        }
+                    },
+                    "required": ["url"]
+                }
+            ),
+            Tool(
+                name="web_search",
+                description="Search DuckDuckGo and return results with titles, URLs, and snippets.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        },
+                        "num_results": {
+                            "type": "number",
+                            "description": "Max results to return (default: 5)",
+                            "default": 5
+                        }
+                    },
+                    "required": ["query"]
+                }
             )
         ]
 
@@ -1337,6 +1576,28 @@ async def main():
             elif name == "fact_suggestions":
                 result = await hive_mind.fact_suggestions(
                     limit=arguments.get("limit", 20)
+                )
+            elif name == "conversation_log":
+                result = await hive_mind.conversation_log(
+                    role=arguments["role"],
+                    content=arguments["content"],
+                    source=arguments["source"],
+                    timestamp=arguments.get("timestamp")
+                )
+            elif name == "conversation_recent":
+                result = await hive_mind.conversation_recent(
+                    limit=arguments.get("limit", 20),
+                    source=arguments.get("source")
+                )
+            elif name == "web_fetch":
+                result = await hive_mind.web_fetch(
+                    url=arguments["url"],
+                    max_chars=arguments.get("max_chars", 8000)
+                )
+            elif name == "web_search":
+                result = await hive_mind.web_search(
+                    query=arguments["query"],
+                    num_results=arguments.get("num_results", 5)
                 )
             else:
                 result = {"error": f"Unknown tool: {name}"}
