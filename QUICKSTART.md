@@ -1,135 +1,118 @@
-# 🐝 Hive-Mind Quick Start
+# Hive-Mind Quick Start
 
-**Get up and running in 2 minutes!**
-
----
-
-## 🎯 What You Have
-
-✅ **HTTP API** running on port 8090
-✅ **MCP Server** configured for Claude Code
-✅ **Redis Cluster** with 9 containers
-✅ **Python Client** ready to use
+Get running in 2 minutes.
 
 ---
 
-## 🚀 Use It Right Now
+## Prerequisites
 
-### Option 1: Open Interpreter / Python Scripts
+- Redis cluster running (6 Docker containers on ports 7000-7005)
+- Python 3.12+ with virtualenv
+- llama-server binary (llama.cpp)
+- AMD GPU with ROCm (tested: R9700 32GB, ROCm 7.12)
+
+---
+
+## Start the Stack
 
 ```bash
 cd /mnt/build/MCP/hive-mind
+
+# 1. Redis cluster (if not running)
+docker ps | grep redis  # should show 6 containers
+
+# 2. HiveCoder-7B (code/shell/tools, 88 tok/s)
+./scripts/start-hivecoder.sh
+
+# 3. R1-Distill-14B (reasoning/analysis, 55 tok/s)
+./scripts/start-r1-distill.sh
+
+# 4. HTTP API with model routing
 source .venv/bin/activate
-python
-```
-
-```python
-from hivemind_client import HiveMindClient
-
-hive = HiveMindClient()
-
-# Store context
-hive.store_memory("Working on AI project", task="Model training")
-
-# Recall context
-context = hive.recall_memory()
-print(context['context'])  # "Working on AI project"
-
-# Get stats
-stats = hive.get_stats()
-print(f"Sessions: {stats['total_sessions']}")
-```
-
-### Option 2: Claude Code
-
-Just ask naturally:
-- "Store context: Working on data analysis"
-- "What was I working on last session?"
-- "Get Hive-Mind stats"
-
-*(MCP tools will be available when Claude Code connects)*
-
-### Option 3: curl / HTTP API
-
-```bash
-# Store memory
-curl -X POST http://localhost:8090/memory/store \
-  -H 'Content-Type: application/json' \
-  -d '{"context": "Quick test", "task": "API demo"}'
-
-# Recall memory
-curl -X POST http://localhost:8090/memory/recall \
-  -H 'Content-Type: application/json' \
-  -d '{}'
-
-# Get stats
-curl http://localhost:8090/stats | jq
+CONFIG_PATH=../config.yaml python mcp-server/http_server.py
 ```
 
 ---
 
-## 🔧 Service Commands
+## Verify
 
 ```bash
-# Check HTTP API status
-sudo systemctl status hive-mind-http
+# Health check
+curl localhost:8090/health
 
-# View logs
+# Chat (auto-routes to best model)
+curl localhost:8090/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "list files in /tmp"}]}'
+
+# Check which model was used
+curl -sI localhost:8090/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "explain btrfs snapshots"}]}' \
+  | grep X-Model
+# X-Model-Used: R1-Distill-14B
+
+# System stats
+curl localhost:8090/stats | python3 -m json.tool
+```
+
+---
+
+## Claude Code Integration
+
+MCP server auto-starts with Claude Code. Config in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "hive-mind": {
+      "command": "/mnt/build/MCP/hive-mind/.venv/bin/python",
+      "args": ["/mnt/build/MCP/hive-mind/mcp-server/server.py"],
+      "env": {
+        "CONFIG_PATH": "/mnt/build/MCP/hive-mind/config.yaml"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Talos (Desktop Client)
+
+```bash
+cd /var/mnt/build/talos
+pip install -e .
+talos                    # interactive REPL with model routing
+```
+
+---
+
+## Service Management
+
+```bash
+# Systemd services
+sudo systemctl status hivecoder-llm hive-mind-http
 sudo journalctl -u hive-mind-http -f
 
-# Restart if needed
-sudo systemctl restart hive-mind-http
-
-# Check Redis cluster
+# Redis cluster
 docker ps | grep redis
+
+# Learning pipeline
+python learning-pipeline/scripts/continuous_learning.py --status
 ```
 
 ---
 
-## 📊 Health Check
+## Key URLs
 
-```bash
-curl http://localhost:8090/health
-# Should return: {"status": "healthy", "redis": "connected"}
-```
-
----
-
-## 🔗 Quick Links
-
-| What | Where |
-|------|-------|
-| **Full Setup Guide** | [DUAL_MODE_SETUP.md](DUAL_MODE_SETUP.md) |
-| **Open Interpreter Guide** | [docs/OPEN_INTERPRETER_INTEGRATION.md](docs/OPEN_INTERPRETER_INTEGRATION.md) |
-| **Project Overview** | [README.md](README.md) |
-| **HTTP API** | http://localhost:8090 |
-| **API Docs** | http://localhost:8090/docs *(auto-generated)* |
+| Service | URL |
+|---------|-----|
+| HTTP API | http://localhost:8090 |
+| API Docs | http://localhost:8090/docs |
+| HiveCoder-7B | http://localhost:8089 |
+| R1-Distill-14B | http://localhost:8080 |
 
 ---
 
-## 💡 Example: Cross-Tool Workflow
-
-```bash
-# 1. In Python/Open Interpreter
-from hivemind_client import HiveMindClient
-hive = HiveMindClient()
-hive.store_memory("Analyzing Q4 sales", task="Generate report")
-
-# 2. Switch to Claude Code
-# Ask: "What was I working on?"
-# Response: "You were analyzing Q4 sales"
-
-# 3. Context persists across tools!
-```
-
----
-
-## 🐝 That's It!
-
-You're ready to use Hive-Mind's distributed memory system.
-
-**HTTP API**: For Open Interpreter, scripts, any tool
-**MCP Protocol**: For Claude Code integration
-**Shared Backend**: Context available everywhere
-
-🚀 **Start using it now!**
+For full documentation see [README.md](README.md) and [MCP_SERVER_READY.md](MCP_SERVER_READY.md).

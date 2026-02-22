@@ -1,273 +1,207 @@
-# 🏗️ Hive-Mind Architecture
+# Hive-Mind Architecture
 
 ## Overview
 
-Hive-Mind is a distributed AI memory and learning system that uses Redis as a central nervous system to coordinate between multiple GPU nodes, providing persistent memory, semantic search, and continuous learning capabilities.
+Hive-Mind is a self-improving AI backend that provides persistent memory, semantic RAG, dual-LLM inference with intelligent routing, and a continuous learning pipeline that trains the code model from the reasoning model's output. Everything runs locally on a single machine.
 
 ## Design Principles
 
-1. **Distributed-first**: No single point of failure, work continues if any node is down
-2. **Learn continuously**: Every interaction improves the system
-3. **Network-efficient**: Minimize round-trips, cache aggressively
-4. **GPU-native**: Leverage available compute for embeddings and training
-5. **Persistence**: All important context survives restarts
-
-## System Components
-
-### 1. Redis Memory Store (NAS)
-
-**Role**: Central persistent storage and coordination layer
-
-**Key Data Structures**:
-```redis
-# Session memory (ephemeral, 7-day TTL)
-HASH session:{session_id}
-  - timestamp
-  - context
-  - files
-  - current_task
-
-# Long-term embeddings (persistent)
-ZSET memory:embeddings          # sorted by timestamp
-  - score: unix_timestamp
-  - member: "{embedding_hash}:{text_hash}"
-
-HASH embedding:{sha256}
-  - vector: binary blob (768-dim)
-  - text: original text
-  - timestamp: creation time
-  - source: where it came from
-
-# Learning queue (STREAM for multi-consumer)
-STREAM learning:queue
-  - user_query
-  - tool_used
-  - result
-  - success
-  - timestamp
-
-# Tool output cache (temporary, 1-hour TTL)
-STRING tool:{tool_name}:{input_hash}
-  - cached output
-
-# Model registry
-HASH models:active
-  - dell: "llama-3.2-8B-instruct"
-  - beast: "qwen3-30B"
-
-# Coordination
-PUBSUB channel:events           # real-time coordination
-SET nodes:active                # heartbeat tracking
-```
-
-**Performance Configuration**:
-```redis
-# redis.conf optimizations
-maxmemory 8gb                   # Use available NAS RAM
-maxmemory-policy allkeys-lru    # Evict old embeddings if needed
-save 900 1                      # RDB snapshot every 15 min
-save 300 10
-save 60 10000
-appendonly yes                  # AOF for durability
-appendfsync everysec            # Balance performance/safety
-```
-
-### 2. MCP Server (Runs on any node)
-
-**Role**: Bridge between Claude Code and Redis memory
-
-**Interface**:
-```python
-class HiveMindMCP:
-    async def get_context(session_id: str) -> Dict
-    async def set_context(session_id: str, context: Dict)
-    async def search_memory(query: str, limit: int) -> List[Dict]
-    async def add_to_learning_queue(interaction: Dict)
-    async def get_tool_cache(tool: str, inputs: str) -> Optional[str]
-    async def set_tool_cache(tool: str, inputs: str, output: str)
-```
-
-**MCP Tools Exposed to Claude**:
-- `memory_recall`: Search past interactions semantically
-- `memory_store`: Explicitly save important context
-- `memory_context`: Get current session state
-- `memory_clear`: Reset session (with confirmation)
-
-### 3. Embedding Service (DELL)
-
-**Role**: Generate vector embeddings for semantic search
-
-**Stack**:
-- sentence-transformers (all-MiniLM-L6-v2 or similar)
-- RDNA2 GPU acceleration via ROCm
-- Redis integration for caching
-
-**API**:
-```python
-POST /embed
-{
-  "text": "What was I doing with PyTorch benchmarks?"
-}
-
-Response:
-{
-  "embedding": [0.123, -0.456, ...],  # 768-dim
-  "hash": "sha256_of_text",
-  "cached": false
-}
-```
-
-### 4. llama-server (DELL)
-
-**Role**: Tool-use model for function calling and reasoning
-
-**Configuration**:
-- Model: Llama 3.2 8B Instruct (or similar)
-- Context: 8K tokens
-- GPU offload: Full (12GB VRAM)
-- Integration: Queries Redis for context before responding
-
-**Use Cases**:
-- Tool selection and parameter extraction
-- Short-form reasoning
-- Context summarization
-- Query reformulation for embeddings
-
-### 5. Training Pipeline (BEAST)
-
-**Role**: Fine-tune models based on successful interactions
-
-**Process**:
-```
-1. Pull from learning:queue (batch of 100-1000 interactions)
-2. Filter for successful tool uses
-3. Generate training examples:
-   <user_query> → <tool_call> → <result>
-4. Fine-tune LoRA adapter on base model
-5. Evaluate on held-out test set
-6. If improved, push to NAS and notify DELL
-7. DELL reloads model with new adapter
-```
-
-**Schedule**:
-- Nightly for small updates (< 1000 examples)
-- Weekly for major retraining
-
-## Data Flow
-
-### Typical Interaction
-
-```
-1. User sends query to Claude Code
-   ↓
-2. MCP server queries Redis:
-   - Get session context
-   - Search embeddings for relevant past interactions
-   ↓
-3. Claude generates response with context
-   ↓
-4. If tool call needed:
-   - Check tool cache in Redis
-   - If miss, execute tool
-   - Cache result
-   ↓
-5. MCP server:
-   - Updates session context
-   - Generates embedding (via DELL service)
-   - Stores in Redis
-   - Adds to learning queue
-   ↓
-6. (Async) BEAST processes learning queue
-```
-
-### Network Topology
-
-```
-            ┌─────────────────────┐
-            │   NAS (Redis)       │
-            │   192.168.1.7:6379  │
-            └──────────┬──────────┘
-                       │ 1Gbps
-         ┌─────────────┼─────────────┐
-         │             │             │
-    ┌────▼────┐   ┌────▼────┐   ┌───▼────┐
-    │ BEAST   │   │ DELL    │   │ Other  │
-    │ :6380   │   │ :8080   │   │ nodes  │
-    └─────────┘   └─────────┘   └────────┘
-   Training      Inference    Future expansion
-```
-
-## Performance Characteristics
-
-### Latency Budget
-
-| Operation | Target | Typical |
-|-----------|--------|---------|
-| Redis GET | < 5ms | 1-3ms |
-| Redis SET | < 10ms | 2-5ms |
-| Embedding generation | < 100ms | 50-80ms |
-| Semantic search (top-10) | < 50ms | 20-40ms |
-| Tool cache hit | < 5ms | 1-3ms |
-| Learning queue add | < 5ms | async |
-
-### Throughput
-
-- **Embeddings**: ~100/sec on DELL RDNA2
-- **Redis ops**: ~10K/sec (local network)
-- **Fine-tuning**: 1 epoch/30min on BEAST
-
-### Storage
-
-- **Session context**: ~10KB per session
-- **Embeddings**: 3KB per embedding (768 floats + metadata)
-- **Learning queue**: ~5KB per interaction
-- **Estimated**: 1M interactions = ~8GB in Redis
-
-## Failure Modes & Recovery
-
-### NAS Down
-- MCP falls back to local SQLite cache
-- Sessions continue but without persistence
-- Auto-reconnect when NAS returns
-- Sync local cache to Redis on reconnect
-
-### DELL Down
-- Embeddings disabled temporarily
-- Fall back to keyword search
-- BEAST can take over embedding generation (slower)
-
-### BEAST Down
-- No impact on inference
-- Learning pipeline paused
-- Queue builds up in Redis
-- Resumes when BEAST returns
-
-### Network Partition
-- Nodes operate independently
-- Redis provides last-known-good context
-- Manual merge on partition heal (flag conflicts)
-
-## Security Considerations
-
-1. **Redis AUTH**: Password-protect Redis instance
-2. **Network**: Firewall Redis port to local network only
-3. **Data privacy**: Embeddings don't leak exact text (use hashes)
-4. **Tool cache**: TTL prevents stale credentials
-5. **Learning queue**: Filter sensitive data before storing
-
-## Scaling Strategy
-
-### Current (Phase 1)
-- 1 NAS, 2 compute nodes
-- Single Redis instance
-- ~1M embeddings in memory
-
-### Future (Phase 2+)
-- Redis Cluster for horizontal scaling
-- Multiple DELL nodes for inference load balancing
-- Distributed training across multiple BEAST-class nodes
-- S3-compatible object storage for model checkpoints
+1. **Self-improving** — every interaction feeds the learning pipeline; R1 teaches HiveCoder
+2. **Local-first** — zero cloud dependencies, all inference and training on-device
+3. **Route intelligently** — send each query to the model best suited for it
+4. **Learn continuously** — LoRA fine-tune, GGUF export, hot-swap without downtime
+5. **Persist everything** — context survives restarts via Redis cluster
 
 ---
 
-**Status**: Phase 1 - Design Complete, Implementation Starting
+## System Components
+
+### 1. Model Router (`mcp-server/router.py`)
+
+Pure-function query classifier. Zero I/O, sub-millisecond.
+
+**Priority order:**
+1. Explicit `model_hint` from client -> use that model
+2. `reason_mode=True` (`/reason` command) -> always R1
+3. Heuristic keyword/pattern scoring:
+   - `CODE_SIGNALS` (~30 keywords): python, bash, write, fix, debug, code blocks, imports, file paths
+   - `REASONING_SIGNALS` (~25 keywords): explain, why, compare, analyze, step by step
+   - Higher score wins; ties -> fast model (HiveCoder)
+4. Default -> HiveCoder (faster)
+
+Returns `RoutingDecision(model_id, reason, confidence)`.
+
+### 2. HTTP API (`mcp-server/http_server.py`, port 8090)
+
+FastAPI server, OpenAI-compatible. Handles:
+- `/v1/chat/completions` — model routing + RAG injection + streaming
+- `/v1/models` — dynamically generated from config
+- `/fact/*`, `/memory/*`, `/conversation/*`, `/web/*` endpoints
+- Routing response headers: `X-Model-Used`, `X-Model-Id`, `X-Routing-Reason`
+
+### 3. LLM Inference (dual model)
+
+| Model | Port | Role | Speed | Quantization |
+|-------|------|------|-------|-------------|
+| HiveCoder-7B | 8089 | Code, shell, tools | 88 tok/s | Q5_K_M (5.1 GB) |
+| R1-Distill-14B | 8080 | Reasoning, analysis | 55 tok/s | Q4_K_M (8.4 GB) |
+
+Both served via `llama-server` (llama.cpp) with ROCm 7.12 on a single AMD R9700 XT (32 GB VRAM). Combined ~21 GB VRAM with 11 GB headroom.
+
+### 4. Redis Cluster (ports 7000-7005)
+
+6 Docker containers: 3 masters + 3 replicas. 12 GB total memory, AOF + RDB persistence.
+
+**Key data structures:**
+
+| Key Pattern | Type | Purpose |
+|-------------|------|---------|
+| `session:{id}` | Hash | Session context (28-day TTL) |
+| `fact:{key}` | String | RAG facts |
+| `fact_embedding:{key}` | String | Pre-computed fact embeddings (base64 float32) |
+| `learning:queue` | Stream | Interaction log for training pipeline |
+| `rag:retrieval_log` | Stream | RAG quality audit trail |
+| `rag:stats` | Hash | Aggregate retrieval counters |
+| `rag:missed_queries` | Sorted Set | Failed queries ranked by frequency |
+| `tool:{name}:{hash}` | String | Tool output cache (1h TTL) |
+| `conversation:{id}` | String | Conversation history |
+
+### 5. Semantic RAG (`mcp-server/server.py`)
+
+- **Model**: bge-small-en-v1.5 (768-dim, ~130 MB, CPU)
+- **Lazy loading**: loads on first use, not at startup
+- **Pre-computed embeddings**: stored in Redis on `fact_store`, base64 float32
+- **Retrieval**: cosine similarity, top-k=5, threshold >= 0.45
+- **Quality tracking**: every retrieval logged with method, scores, quality classification
+- **Fallback**: keyword filter if embedding model unavailable
+- **Hit rate**: 84% across 31 stored facts
+
+### 6. MCP Server (`mcp-server/server.py`, stdio)
+
+Claude Code integration. 12 tools across 4 categories:
+- Memory (store, recall, list_sessions)
+- Facts/RAG (store, get, delete, suggestions)
+- LLM (generate, code_assist, complete)
+- System (tool_cache, learning_queue, stats)
+
+### 7. Continuous Learning Pipeline (`learning-pipeline/scripts/`)
+
+Daemon runs every 5 minutes:
+
+```
+Redis learning:queue
+  -> Drain interactions
+    -> Quality filter (r1-distill -> always pass, successful -> pass, failed -> skip)
+      -> Format as JSONL training examples
+        -> LoRA fine-tune HiveCoder (r=16, alpha=32, 1 epoch)
+          -> GGUF export (Q5_K_M)
+            -> Hot-swap into running llama-server
+              -> Version bump (MODEL_VERSION)
+```
+
+GPU orchestration: stops llama-server before training, restarts after deploy. Desktop notifications via `notify-send`.
+
+---
+
+## Knowledge Distillation
+
+The key architectural insight: **R1's answers train HiveCoder.**
+
+```
+R1-Distill-14B
+  -> Produces high-quality reasoning responses
+    -> Auto-rated positive by Talos TUI
+      -> Tagged model_source="r1-distill"
+        -> Quality filter: r1-distill always passes
+          -> LoRA training data for HiveCoder
+            -> HiveCoder gets smarter over time
+              -> Handles more queries itself
+                -> Only hardest reasoning goes to R1
+```
+
+Pure-reasoning answers (no shell commands) are captured via `build_reasoning_interaction()` — previously these were silently dropped.
+
+---
+
+## Data Flow
+
+### Query Lifecycle
+
+```
+1. User query arrives (Talos TUI, Firefox sidebar, or HTTP client)
+2. HTTP API extracts query text
+3. Model Router classifies intent -> RoutingDecision
+4. RAG: embed query, cosine search facts, inject into system prompt
+5. Forward to HiveCoder-7B (:8089) or R1-Distill-14B (:8080)
+6. Stream response back with routing headers
+7. Client displays response, executes any tool calls
+8. Auto-rate interaction (exit codes for commands, always-positive for R1)
+9. Log to learning:queue with model_source metadata
+10. Learning daemon picks up, filters, trains, deploys
+```
+
+### Clients
+
+| Client | Protocol | Features |
+|--------|----------|----------|
+| Talos TUI | HTTP API | Agentic execution, tool-use, reasoning, auto-rating, distillation |
+| Firefox/Zen Extension | HTTP API | Streaming, markdown, suggestions, conversation persistence |
+| Claude Code | MCP (stdio) | Memory, facts, LLM generation, learning queue |
+| curl / scripts | HTTP API | Any OpenAI-compatible client |
+
+---
+
+## Configuration
+
+Multi-model config in `config.yaml`:
+
+```yaml
+inference:
+  enabled: true
+  default_model: "hivecoder-7b"
+  timeout: 120
+  models:
+    hivecoder-7b:
+      endpoint: "http://127.0.0.1:8089"
+      display_name: "HiveCoder-7B"
+      capabilities: ["code", "shell", "tools"]
+      max_tokens: 1024
+    r1-distill-14b:
+      endpoint: "http://127.0.0.1:8080"
+      display_name: "R1-Distill-14B"
+      capabilities: ["reasoning", "analysis", "explanation"]
+      max_tokens: 2048
+```
+
+Backward compatible: if no `models` dict, falls back to flat `inference.endpoint`.
+
+---
+
+## Hardware
+
+| Component | Spec |
+|-----------|------|
+| CPU | AMD Ryzen 9 7900X (16 threads) |
+| GPU | AMD Radeon RX 9070 XT (32 GB VRAM) |
+| ROCm | 7.12 (TheRock build) |
+| PyTorch | 2.10.0 (custom ROCm 7.12 build) |
+| OS | Fedora 43 Kinoite (rpm-ostree, Wayland) |
+| Desktop | KDE Plasma 6 |
+
+VRAM allocation: HiveCoder ~7 GB + R1-Distill ~13 GB = ~21 GB / 32 GB.
+
+---
+
+## Future: Multi-Node
+
+```
+aurora (current)                    r720xd (planned)
+├── Redis Cluster (7000-7005)       ├── Redis replicas
+├── HiveCoder-7B (:8089)            ├── Embedding service
+├── R1-Distill-14B (:8080)          └── Storage (24x 2.5" bays)
+├── HTTP API (:8090)
+├── Learning pipeline
+└── Training (LoRA + GGUF)
+
+Connected via Tailscale VPN mesh.
+```

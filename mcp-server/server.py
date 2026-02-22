@@ -997,6 +997,156 @@ class HiveMindMCP:
         except Exception as e:
             return {"error": str(e), "results": []}
 
+    # ========== Conversation Persistence Methods ==========
+
+    async def conversation_save(self, conversation_id: str, title: str = "",
+                                messages: Optional[List[Dict]] = None,
+                                source: str = "tui") -> Dict[str, Any]:
+        """
+        Save a conversation for later retrieval.
+
+        Args:
+            conversation_id: Unique conversation ID
+            title: Conversation title (auto-generated from first user message if empty)
+            messages: List of message dicts with role and content
+            source: Client source ('tui' or 'firefox')
+        """
+        messages = messages or []
+
+        # Auto-generate title from first user message
+        if not title:
+            for msg in messages:
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    title = content[:80].strip()
+                    if len(content) > 80:
+                        title += "..."
+                    break
+            if not title:
+                title = "Untitled conversation"
+
+        meta = {
+            "title": title,
+            "source": source,
+            "message_count": str(len(messages)),
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        meta_key = f"conv:{conversation_id}:meta"
+        msgs_key = f"conv:{conversation_id}:messages"
+
+        # Store meta hash
+        await self.redis_client.hset(meta_key, mapping=meta)
+
+        # Store messages as a single JSON blob (simpler than a list for atomic read)
+        await self.redis_client.set(msgs_key, json.dumps(messages))
+
+        # Index in sorted set by timestamp
+        await self.redis_client.zadd(
+            "conversations:index",
+            {conversation_id: time.time()}
+        )
+
+        # 28-day TTL
+        ttl = 28 * 86400
+        await self.redis_client.expire(meta_key, ttl)
+        await self.redis_client.expire(msgs_key, ttl)
+
+        logger.info(f"Saved conversation {conversation_id}: {title}")
+        return {"success": True, "conversation_id": conversation_id, "title": title}
+
+    async def conversation_load(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Load a saved conversation.
+
+        Args:
+            conversation_id: Conversation ID to load
+        """
+        meta_key = f"conv:{conversation_id}:meta"
+        msgs_key = f"conv:{conversation_id}:messages"
+
+        meta = await self.redis_client.hgetall(meta_key)
+        if not meta:
+            return {"success": False, "error": f"Conversation {conversation_id} not found"}
+
+        msgs_raw = await self.redis_client.get(msgs_key)
+        messages = json.loads(msgs_raw) if msgs_raw else []
+
+        return {
+            "success": True,
+            "conversation_id": conversation_id,
+            "title": meta.get("title", ""),
+            "source": meta.get("source", ""),
+            "message_count": int(meta.get("message_count", 0)),
+            "created_at": meta.get("created_at", ""),
+            "updated_at": meta.get("updated_at", ""),
+            "messages": messages,
+        }
+
+    async def conversation_list_saved(self, limit: int = 20,
+                                       source: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List saved conversations.
+
+        Args:
+            limit: Max conversations to return
+            source: Optional filter by source
+        """
+        ids = await self.redis_client.zrevrange("conversations:index", 0, limit * 2 - 1)
+
+        conversations = []
+        for conv_id in ids:
+            meta = await self.redis_client.hgetall(f"conv:{conv_id}:meta")
+            if not meta:
+                continue
+            if source and meta.get("source") != source:
+                continue
+            conversations.append({
+                "conversation_id": conv_id,
+                "title": meta.get("title", ""),
+                "source": meta.get("source", ""),
+                "message_count": int(meta.get("message_count", 0)),
+                "created_at": meta.get("created_at", ""),
+                "updated_at": meta.get("updated_at", ""),
+            })
+            if len(conversations) >= limit:
+                break
+
+        return {"success": True, "conversations": conversations}
+
+    async def conversation_export(self, conversation_id: str,
+                                   format: str = "markdown") -> Dict[str, Any]:
+        """
+        Export a conversation as markdown or JSON.
+
+        Args:
+            conversation_id: Conversation ID to export
+            format: 'markdown' or 'json'
+        """
+        data = await self.conversation_load(conversation_id)
+        if not data.get("success"):
+            return data
+
+        messages = data.get("messages", [])
+        title = data.get("title", "Untitled")
+
+        if format == "json":
+            content = json.dumps({
+                "title": title,
+                "conversation_id": conversation_id,
+                "messages": messages,
+            }, indent=2)
+        else:
+            lines = [f"# {title}\n"]
+            for msg in messages:
+                role = msg.get("role", "unknown").capitalize()
+                content_text = msg.get("content", "")
+                lines.append(f"**{role}:** {content_text}\n")
+            content = "\n".join(lines)
+
+        return {"success": True, "format": format, "content": content}
+
     # ========== LLM Inference Methods ==========
 
     async def llm_generate(self, prompt: str, mode: str = "code",

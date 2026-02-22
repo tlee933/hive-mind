@@ -1,129 +1,56 @@
 # Hive-Mind Roadmap
 
-Future enhancements and planned features for the Hive-Mind distributed AI memory system.
-
-## Current State (February 2026)
-
-### RAG Fact Injection
-- **Implemented**: Keyword-based filtering for selective fact injection
-- **How it works**: Query keywords map to relevant fact keys
-  - "gpu" query -> `gpu`, `rocm_version`, `pytorch_location` facts
-  - "install" query -> `package_management`, `system_type` facts
-  - "os/linux" query -> `operating_system`, `desktop_environment` facts
-- **Benefits**: Reduces token overhead by only injecting relevant context
-
-### Local LLM
-- HiveCoder-7B (Qwen2.5-Coder-7B + LoRA fine-tuned)
-- Continuous learning pipeline with 50-sample threshold
-- Q5_K_M GGUF quantization (5.1GB)
+*Last updated: 2026-02-22*
 
 ---
 
-## Planned Enhancements
+## Completed
 
-### Phase 1: Semantic Search for RAG (High Priority)
-
-**Goal**: Replace keyword-based filtering with embedding-based semantic similarity.
-
-**Why**:
-- Keyword matching misses synonyms ("graphics card" vs "gpu")
-- Semantic search understands meaning, not just words
-- Better retrieval quality = more relevant context = better responses
-
-**Implementation Options**:
-
-#### Option A: Small Embedding Model (Recommended)
-```
-Query -> Embedding Model -> Vector -> Redis Vector Search -> Top-K Facts
-```
-
-**Candidate Models**:
-| Model | Size | Speed | Quality |
-|-------|------|-------|---------|
-| all-MiniLM-L6-v2 | 80MB | ~5ms | Good |
-| e5-small-v2 | 130MB | ~8ms | Better |
-| bge-small-en-v1.5 | 130MB | ~8ms | Best for RAG |
-
-**Infrastructure**:
-- Store fact embeddings in Redis with `RediSearch` vector index
-- Pre-compute embeddings when facts are stored
-- At query time: embed query, vector search, return top-K facts
-
-**Estimated Overhead**:
-- Latency: +5-15ms per query
-- Memory: +200MB for model
-- Storage: ~1.5KB per fact (384-dim float32)
-
-#### Option B: LLM-Based Relevance Scoring
-Use HiveCoder-7B to score fact relevance (slower but more accurate).
-
-```
-Query + Facts -> HiveCoder -> Relevance Scores -> Top-K Facts
-```
-
-**Trade-offs**:
-- Slower: +500ms per query
-- More accurate for complex queries
-- No additional model needed
-
-### Phase 2: Multi-Node Embedding Service
-
-**Goal**: Offload embedding computation to r720xd storage server.
-
-**Why**:
-- Free up GPU VRAM on aurora for LLM inference
-- r720xd has plenty of CPU/RAM for embedding models
-- Network latency acceptable for async embedding
-
-**Architecture**:
-```
-aurora (LLM inference) <---> Redis Cluster <---> r720xd (embeddings + storage)
-```
-
-### Phase 3: Hybrid RAG
-
-Combine multiple retrieval methods:
-1. **Keyword matching** - Fast, exact matches
-2. **Semantic search** - Meaning-based similarity
-3. **Recency weighting** - Prefer recent facts
-4. **Source weighting** - Trust authoritative sources more
-
-**Fusion Strategy**: Reciprocal Rank Fusion (RRF) to combine results.
+- [x] Redis Cluster (6 nodes, 3 masters + 3 replicas)
+- [x] MCP Server + Claude Code integration (12 tools)
+- [x] HTTP API with OpenAI-compatible proxy (:8090)
+- [x] HiveCoder-7B — LoRA fine-tuned Qwen2.5-Coder-7B (88 tok/s)
+- [x] R1-Distill-14B — DeepSeek-R1-Distill-Qwen-14B (55 tok/s)
+- [x] Intelligent model router (pure-function query classifier)
+- [x] Knowledge distillation (R1 answers train HiveCoder)
+- [x] Semantic RAG (bge-small-en-v1.5 embeddings, 768-dim)
+- [x] Active retrieval tracking (hit rate, missed queries, gap analysis)
+- [x] Continuous learning pipeline (LoRA -> GGUF -> hot-swap)
+- [x] GPU orchestration (stop inference for training, auto-restart)
+- [x] Multi-epoch validation with early stopping
+- [x] Talos TUI client (agentic execution, tool-use, reasoning)
+- [x] Firefox/Zen sidebar extension (v0.7.3)
+- [x] Conversation bridge (TUI <-> Firefox via Redis)
 
 ---
 
-## Research Items
+## Next
 
-### Token-Efficient Context
-- Investigate context distillation techniques
-- Explore fact compression/summarization
+### Cascade Routing
+If HiveCoder returns < 50 tokens AND confidence < 0.7, re-query R1. Requires response buffering for streaming. Better after base router is proven in production.
 
-### Active Learning
-- Use query logs to identify missing facts
-- Suggest fact additions based on failed retrievals
+### Evaluation Framework
+Measure distillation effectiveness over time. Track HiveCoder's accuracy on reasoning queries across LoRA versions. A/B test routing thresholds.
 
-### Cross-Session Memory
-- Link related sessions for context carryover
-- Build user preference profiles
+### Multi-Node Deployment
+- Deploy R1-Distill or embedding service on r720xd
+- Add r720xd as Redis replica nodes
+- Offload embedding computation to CPU-heavy server
 
----
+### Additional Models
+- Vision model for screenshot/diagram analysis
+- Dedicated embedding model on separate GPU or CPU node
 
-## Infrastructure Improvements
-
-### Short Term
-- [ ] Migrate FastAPI to lifespan handlers (deprecation warning)
-- [ ] Add Prometheus metrics for RAG pipeline
-- [ ] Health check for embedding service
-
-### Long Term
-- [ ] Kubernetes deployment manifests
-- [ ] Horizontal scaling for embedding service
-- [ ] A/B testing framework for retrieval strategies
+### Infrastructure
+- TLS for Redis inter-node communication
+- Prometheus metrics for RAG pipeline + routing
+- Horizontal scaling for embedding service
 
 ---
 
-## Contributing
+## Research
 
-See [JOURNEY.md](JOURNEY.md) for project history and design decisions.
-
-*Last updated: 2026-02-12*
+- Context distillation — compress/summarize facts to reduce token overhead
+- Hybrid RAG — combine semantic + keyword + recency + source weighting via RRF
+- Router fine-tuning — train a small classifier on actual routing outcomes
+- Cross-session memory linking — build user preference profiles from session history
