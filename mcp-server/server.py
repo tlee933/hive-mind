@@ -910,7 +910,7 @@ class HiveMindMCP:
             timeout = aiohttp.ClientTimeout(total=15)
             headers = {"User-Agent": "Talos/0.6 (local AI assistant)"}
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers, ssl=False) as resp:
+                async with session.get(url, headers=headers) as resp:
                     if resp.status != 200:
                         return {"error": f"HTTP {resp.status}", "url": url}
                     html = await resp.text()
@@ -962,7 +962,7 @@ class HiveMindMCP:
             url = f"https://html.duckduckgo.com/html/?{encoded}"
 
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers, ssl=False) as resp:
+                async with session.get(url, headers=headers) as resp:
                     if resp.status != 200:
                         return {"error": f"HTTP {resp.status}", "results": []}
                     html = await resp.text()
