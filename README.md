@@ -165,7 +165,7 @@ open http://localhost:8090/docs
 
 ## Continuous Learning Pipeline
 
-The system improves itself over time:
+The system improves itself over time via [self-instruct](https://arxiv.org/abs/2212.10560) — R1's high-quality responses become training data for HiveCoder:
 
 1. **Collect** — Every LLM interaction is logged to a Redis stream
 2. **Filter** — Quality filter removes low-quality samples; R1 responses always pass

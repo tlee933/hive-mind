@@ -105,7 +105,7 @@ GPU orchestration: stops llama-server before training, restarts after deploy. De
 
 ## Knowledge Distillation
 
-The key architectural insight: **R1's answers train HiveCoder.**
+The key architectural insight: **R1's answers train HiveCoder.** This is a form of self-instruct [[Wang et al., 2022]](https://arxiv.org/abs/2212.10560) — the system generates its own training data from high-quality responses, creating a self-improving loop.
 
 ```
 R1-Distill-14B
@@ -205,3 +205,9 @@ aurora (current)                    r720xd (planned)
 
 Connected via Tailscale VPN mesh.
 ```
+
+---
+
+## References
+
+- Wang, Y., Kordi, Y., Mishra, S., Liu, A., Smith, N. A., Khashabi, D., & Hajishirzi, H. (2022). *Self-Instruct: Aligning Language Model with Self Generated Instructions.* arXiv:2212.10560. https://arxiv.org/abs/2212.10560
