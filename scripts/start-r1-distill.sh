@@ -7,7 +7,7 @@ export HSA_OVERRIDE_GFX_VERSION=12.0.1
 export ROCM_PATH=/opt/rocm
 export HIP_PATH=/opt/rocm
 export PATH=/opt/rocm/bin:/usr/local/bin:/usr/bin:/bin
-export LD_LIBRARY_PATH=/var/mnt/build/llama.cpp-rocm/build/bin:/opt/rocm/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
 
 # ROCm optimization for RDNA4
 export GPU_MAX_HW_QUEUES=8
