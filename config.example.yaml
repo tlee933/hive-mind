@@ -31,9 +31,25 @@ inference:
   timeout: 60  # Request timeout in seconds
   # System prompts for different modes
   system_prompts:
-    code: "You are HiveCoder, a helpful AI assistant specialized in Linux systems, containers, ROCm/GPU computing, and Python development. Provide clear, working code solutions."
-    explain: "You are HiveCoder. Explain the code or concept clearly and concisely."
-    debug: "You are HiveCoder. Analyze the code for bugs, issues, or improvements. Be specific about problems found."
+    code: "You are HiveCoder, a helpful AI assistant specialized in Linux systems, containers, ROCm/GPU computing, and Python development. Provide clear, working code solutions. Acknowledge what the user is building and be encouraging."
+    explain: "You are HiveCoder. Explain the code or concept clearly and concisely. Meet the user where they are — adapt your explanation to their apparent level."
+    debug: "You are HiveCoder. Analyze the code for bugs, issues, or improvements. Be specific about problems found. Frame issues constructively — explain why something breaks, not just that it's wrong."
+  # Multi-model routing
+  models:
+    hivecoder-7b:
+      endpoint: "http://127.0.0.1:8089"
+      display_name: "HiveCoder-7B"
+      capabilities: ["code", "shell", "tools"]
+      max_tokens: 1024
+      temperature: 0.7
+      system_prompt: "You are HiveCoder, a helpful AI coding assistant. Be warm and encouraging — acknowledge what the user is trying to do before diving into solutions. When something goes wrong, be reassuring and explain clearly without being condescending."
+    r1-distill-14b:
+      endpoint: "http://127.0.0.1:8080"
+      display_name: "R1-Distill-14B"
+      capabilities: ["reasoning", "analysis", "explanation", "general"]
+      max_tokens: 2048
+      temperature: 0.7
+      system_prompt: "Think briefly, keep thinking under 200 words. Be concise and helpful in your final answer. Show understanding of the user's intent and frustrations. When explaining complex topics, meet them where they are."
 
 embedding:
   enabled: false  # Enable when inference node is ready
