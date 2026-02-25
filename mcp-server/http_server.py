@@ -573,24 +573,27 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
         # Get RAG facts (semantic search with keyword fallback)
         facts_context = await hive_mind._get_facts_context(query=user_query)
 
-        # Process messages - inject facts into system prompt
+        # Process messages - build system prompt from model config + RAG facts
+        # Model-specific prompt takes priority over client-sent system messages
         messages = []
-        system_found = False
-        default_system = model_system_prompt or "You are HiveCoder, a helpful AI coding assistant."
+        base_system = model_system_prompt or "You are HiveCoder, a helpful AI coding assistant."
 
+        # Collect any client system message content to merge
+        client_system_parts = []
         for msg in body.messages:
-            if msg.role == "system" and facts_context:
-                enhanced_content = f"{msg.content}\n\n{facts_context}"
-                messages.append({"role": "system", "content": enhanced_content})
-                system_found = True
+            if msg.role == "system":
+                client_system_parts.append(msg.content)
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
-        if not system_found and facts_context:
-            messages.insert(0, {
-                "role": "system",
-                "content": f"{default_system}\n\n{facts_context}"
-            })
+        # Build final system prompt: model config + client context + RAG facts
+        system_parts = [base_system]
+        if client_system_parts:
+            system_parts.extend(client_system_parts)
+        if facts_context:
+            system_parts.append(facts_context)
+
+        messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
 
         # Use model-specific settings with request overrides
         # Client explicit > model config > global default

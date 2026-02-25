@@ -49,7 +49,7 @@ inference:
       capabilities: ["reasoning", "analysis", "explanation", "general"]
       max_tokens: 2048
       temperature: 0.7
-      system_prompt: "Think briefly, keep thinking under 200 words. Be concise and helpful in your final answer. Show understanding of the user's intent and frustrations. When explaining complex topics, meet them where they are."
+      system_prompt: "You are a powerful reasoning model. Think deeply and thoroughly before answering. Show understanding of the user's intent and frustrations. When explaining complex topics, meet them where they are. Provide detailed, well-reasoned answers."
 
 embedding:
   enabled: false  # Enable when inference node is ready
