@@ -174,6 +174,185 @@ def _hm(request: Request) -> HiveMindMCP:
     return hm
 
 
+import re
+
+# Server-side context pruning
+CHARS_PER_TOKEN = 3.5
+THINK_RE = re.compile(r'<think>[\s\S]*?</think>\s*')
+MIN_RECENT_TURNS = 6
+
+
+def _estimate_tokens(text: str) -> int:
+    """Approximate token count from character length."""
+    return int(len(text) / CHARS_PER_TOKEN)
+
+
+def _api_content(msg: dict) -> str:
+    """Return content as the model will see it (think blocks stripped)."""
+    content = msg.get('content', '') or ''
+    if msg.get('role') == 'assistant':
+        return THINK_RE.sub('', content).strip()
+    return content
+
+
+def _prune_context(messages: list[dict], model_cfg: dict, inference_cfg: dict) -> list[dict]:
+    """Prune conversation messages to fit the model's context window.
+
+    Logs a before/after comparison when messages are dropped.
+    Returns the pruned message list.
+    """
+    # Context window from llama-server config (default 32K)
+    context_window = model_cfg.get('context_window', inference_cfg.get('context_window', 32768))
+    reserved_tokens = model_cfg.get('reserved_tokens', inference_cfg.get('reserved_tokens', 4096))
+    max_tokens = context_window - reserved_tokens
+
+    # Separate system message from conversation
+    system_msg = None
+    conversation = []
+    for msg in messages:
+        if msg['role'] == 'system' and system_msg is None:
+            system_msg = msg
+        else:
+            conversation.append(msg)
+
+    system_tokens = _estimate_tokens(system_msg['content']) if system_msg else 0
+    budget = max_tokens - system_tokens
+
+    # Calculate token cost per message (using API-visible content)
+    msg_tokens = [_estimate_tokens(_api_content(m)) for m in conversation]
+    total_tokens = sum(msg_tokens)
+
+    if total_tokens <= budget:
+        # Fits — no pruning needed
+        return messages
+
+    # --- Pruning needed: log comparison ---
+    incoming_count = len(conversation)
+
+    # Step 1: Truncate individually long messages (except last 2)
+    MAX_MSG_TOKENS = 800
+    for i in range(len(conversation) - 2):
+        if msg_tokens[i] > MAX_MSG_TOKENS:
+            max_chars = int(MAX_MSG_TOKENS * CHARS_PER_TOKEN)
+            old_preview = conversation[i]['content'][:80]
+            conversation[i] = {
+                **conversation[i],
+                'content': conversation[i]['content'][:max_chars] + '\n...(truncated)',
+            }
+            msg_tokens[i] = MAX_MSG_TOKENS
+            logger.debug(f"Context prune: truncated msg {i} ({conversation[i]['role']}): \"{old_preview}...\"")
+
+    total_tokens = sum(msg_tokens)
+    if total_tokens <= budget:
+        result = ([system_msg] if system_msg else []) + conversation
+        logger.info(f"Context prune: truncation sufficient ({total_tokens}/{budget} tokens), {incoming_count} msgs kept")
+        return result
+
+    # Step 2: Score and drop middle messages by importance (lowest first)
+    if len(conversation) <= MIN_RECENT_TURNS + 1:
+        result = ([system_msg] if system_msg else []) + conversation
+        logger.info(f"Context prune: too few msgs to drop ({len(conversation)}), sending as-is")
+        return result
+
+    first = [conversation[0]]
+    first_tokens = [msg_tokens[0]]
+    recent = conversation[-MIN_RECENT_TURNS:]
+    recent_tokens = msg_tokens[-MIN_RECENT_TURNS:]
+    middle = list(zip(
+        conversation[1:-MIN_RECENT_TURNS],
+        msg_tokens[1:-MIN_RECENT_TURNS],
+        range(1, len(conversation) - MIN_RECENT_TURNS),  # original index for recency
+    ))
+
+    def _importance(entry):
+        """Score message importance: higher = keep longer."""
+        msg, tok, idx = entry
+        content = msg.get('content', '') or ''
+        role = msg.get('role', '')
+        score = 0.0
+
+        # Recency: newer messages score higher (normalized 0-1)
+        max_idx = len(conversation) - 1
+        score += (idx / max_idx) * 3.0  # up to 3 points
+
+        # Questions from user are high value (set context)
+        if role == 'user' and '?' in content:
+            score += 2.0
+
+        # Code blocks are high value (concrete artifacts)
+        if '```' in content:
+            score += 2.0
+
+        # Longer content tends to be more substantive
+        if tok > 100:
+            score += 1.0
+
+        # Error messages are diagnostic context
+        if 'error' in content.lower() or 'Error' in content:
+            score += 1.5
+
+        # System messages (like pruned markers) are low value
+        if role == 'system':
+            score -= 2.0
+
+        # Short assistant responses (acknowledgements) are low value
+        if role == 'assistant' and tok < 20:
+            score -= 1.0
+
+        return score
+
+    dropped = []
+    while middle:
+        current_total = sum(first_tokens) + sum(t for _, t, _ in middle) + sum(recent_tokens)
+        if current_total <= budget:
+            break
+        # Drop lowest-importance message
+        middle.sort(key=_importance)
+        dropped_msg, dropped_tok, dropped_idx = middle.pop(0)
+        dropped.append((dropped_msg, dropped_tok, dropped_idx))
+
+    # Log what was dropped (sort by original position for readable output)
+    middle.sort(key=lambda e: e[2])  # restore positional order
+    kept_middle = [m for m, _, _ in middle]
+    final_count = len(first) + len(kept_middle) + len(recent)
+    dropped.sort(key=lambda e: e[2])
+
+    # Quality metric: measure information retention
+    dropped_tokens = sum(t for _, t, _ in dropped)
+    kept_tokens = sum(first_tokens) + sum(t for _, t, _ in middle) + sum(recent_tokens)
+    retention = kept_tokens / total_tokens if total_tokens > 0 else 1.0
+    # Score dropped content by importance to measure quality loss
+    dropped_importance = sum(_importance(e) for e in dropped) if dropped else 0
+    kept_importance = (
+        sum(_importance((m, t, 0)) for m, t in zip(first, first_tokens))
+        + sum(_importance(e) for e in middle)
+        + sum(_importance((m, t, len(conversation) - 1)) for m, t in zip(recent, recent_tokens))
+    )
+    quality = kept_importance / (kept_importance + dropped_importance) if (kept_importance + dropped_importance) > 0 else 1.0
+
+    logger.info(
+        f"Context prune: {incoming_count} msgs → {final_count} msgs "
+        f"(dropped {len(dropped)}, budget {budget} tok) | "
+        f"retention: {retention:.0%} tokens, {quality:.0%} quality"
+    )
+    for msg, tok, idx in dropped:
+        preview = (msg.get('content', '') or '')[:100].replace('\n', ' ')
+        score = _importance((msg, tok, idx))
+        logger.info(f"  dropped [{msg['role']}] pos={idx} score={score:.1f} ({tok} tok): \"{preview}\"")
+
+    # Reassemble
+    result = []
+    if system_msg:
+        result.append(system_msg)
+    result.extend(first)
+    if not kept_middle and dropped:
+        result.append({'role': 'system', 'content': f'[{len(dropped)} earlier messages pruned for context]'})
+    result.extend(kept_middle)
+    result.extend(recent)
+
+    return result
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -594,6 +773,10 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
             system_parts.append(facts_context)
 
         messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
+
+        # Server-side context pruning — prune to fit model's context window
+        # This is the authoritative pruning; clients can send full history
+        messages = _prune_context(messages, model_cfg, inference_config)
 
         # Use model-specific settings with request overrides
         # Client explicit > model config > global default
