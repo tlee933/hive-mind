@@ -130,11 +130,6 @@ class QualityFilter:
                     filtered.append(item)
                 continue
 
-            # R1-distill responses always pass (knowledge distillation)
-            if item.get('model_source') == 'r1-distill':
-                filtered.append(item)
-                continue
-
             # Must be successful
             if not item.get('success', True):
                 continue
@@ -524,6 +519,17 @@ class ContinuousLearner:
         except Exception as e:
             logger.error(f"Error publishing stats: {e}")
 
+    def _check_remote_available(self, host: str) -> bool:
+        """Check if remote training host is reachable via SSH."""
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host, "echo ok"],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0 and "ok" in result.stdout
+        except Exception:
+            return False
+
     def _run_systemctl(self, action: str, service: str, user_service: bool = False) -> bool:
         """Run systemctl action on a service. Returns True on success."""
         if user_service:
@@ -601,45 +607,53 @@ class ContinuousLearner:
 
     @contextmanager
     def _gpu_training_context(self):
-        """Context manager that clears GPU for training and restores services after."""
+        """Context manager that clears GPU for training and restores services after.
+        If training will be offloaded to alderlake, skip stopping local LLM."""
+        remote_host = "hashcat@192.168.1.10"
+        remote_available = self._check_remote_available(remote_host)
         stopped_llm = False
         stopped_user_llama = False
 
-        # Stop hivecoder-llm (required — abort if fails)
-        if self._is_service_active("hivecoder-llm"):
-            self._notify("HiveCoder Training Starting", "Stopping LLM to free GPU for training")
-            if not self._run_systemctl("stop", "hivecoder-llm"):
-                raise RuntimeError("Failed to stop hivecoder-llm — aborting training to avoid OOM")
-            stopped_llm = True
+        if remote_available:
+            logger.info("Training will be offloaded to alderlake — keeping local LLM running")
+        else:
+            # Stop hivecoder-llm (required — abort if fails)
+            if self._is_service_active("hivecoder-llm"):
+                self._notify("HiveCoder Training Starting", "Stopping LLM to free GPU for training")
+                if not self._run_systemctl("stop", "hivecoder-llm"):
+                    raise RuntimeError("Failed to stop hivecoder-llm — aborting training to avoid OOM")
+                stopped_llm = True
 
-        # Stop user llama-server (optional, best-effort)
-        if self._is_service_active("llama-server", user_service=True):
-            logger.info("Stopping user llama-server...")
-            if self._run_systemctl("stop", "llama-server", user_service=True):
-                stopped_user_llama = True
-            else:
-                logger.warning("Could not stop user llama-server, continuing anyway")
+            # Stop user llama-server (optional, best-effort)
+            if self._is_service_active("llama-server", user_service=True):
+                logger.info("Stopping user llama-server...")
+                if self._run_systemctl("stop", "llama-server", user_service=True):
+                    stopped_user_llama = True
+                else:
+                    logger.warning("Could not stop user llama-server, continuing anyway")
 
-        # Wait for GPU memory to free
-        time.sleep(5)
-        vram_used = self._check_vram_used()
-        if vram_used >= 0:
-            logger.info(f"VRAM after clearing: {vram_used:.1f}GB used")
+            # Wait for GPU memory to free
+            time.sleep(5)
+            vram_used = self._check_vram_used()
+            if vram_used >= 0:
+                logger.info(f"VRAM after clearing: {vram_used:.1f}GB used")
 
         try:
             yield
         finally:
-            # Restart user llama-server if we stopped it
-            if stopped_user_llama:
-                logger.info("Restarting user llama-server...")
-                self._run_systemctl("start", "llama-server", user_service=True)
+            if not remote_available:
+                # Restart user llama-server if we stopped it
+                if stopped_user_llama:
+                    logger.info("Restarting user llama-server...")
+                    self._run_systemctl("start", "llama-server", user_service=True)
 
-            # Restart hivecoder-llm only if it's not already running
-            # (deploy_version restarts it on success; this handles the failure case)
-            if stopped_llm and not self._is_service_active("hivecoder-llm"):
-                logger.info("Restarting hivecoder-llm (fallback)...")
-                self._run_systemctl("start", "hivecoder-llm")
-                self._notify("HiveCoder LLM Restored", "LLM restarted with previous model (training/deploy did not complete)")
+                # Restart hivecoder-llm if it's not running
+                # (covers both: clean stop+train+fail, and timed-out stop where
+                # systemd eventually kills the process after our 30s timeout)
+                if not self._is_service_active("hivecoder-llm"):
+                    logger.info("Restarting hivecoder-llm...")
+                    self._run_systemctl("start", "hivecoder-llm")
+                    self._notify("HiveCoder LLM Restored", "LLM restarted after training cycle")
 
     def cleanup_old_versions(self):
         """Remove old model versions, keeping deployed + N previous"""
@@ -695,7 +709,7 @@ class ContinuousLearner:
         version_dir.mkdir(parents=True, exist_ok=True)
 
         # Get base model (use the foundation model or latest deployed)
-        base_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+        base_model = "Qwen/Qwen3-14B"
         deployed = self.registry.get_deployed()
 
         logger.info(f"Starting training for version {version_id}")
@@ -716,20 +730,49 @@ class ContinuousLearner:
         )
         self.registry.add_version(version)
 
-        # Run training
-        train_script = self.base_dir / "learning-pipeline" / "scripts" / "train_lora.py"
+        # Run training — offload to alderlake if available, else run locally
+        remote_host = "hashcat@192.168.1.10"
+        remote_venv = "/var/home/hashcat/learning-pipeline/.venv/bin/python3"
+        remote_script = "/var/home/hashcat/learning-pipeline/scripts/train_lora.py"
+        remote_data_dir = "/var/home/hashcat/learning-pipeline/data/continuous"
+        remote_output = f"/var/home/hashcat/learning-pipeline/models/{version_id}/lora"
 
-        cmd = [
-            sys.executable, str(train_script),
-            "--model", base_model,
-            "--dataset", str(training_file),
-            "--output", str(version_dir / "lora"),
-            "--epochs", "3",
-            "--batch-size", "auto",
-            "--val-split", "0.2",
-            "--early-stopping-patience", "2",
-            "--min-samples-for-split", "10",
-        ]
+        use_remote = self._check_remote_available(remote_host)
+
+        if use_remote:
+            logger.info(f"Offloading training to alderlake ({remote_host})")
+            # Sync training data to alderlake
+            subprocess.run(
+                ["rsync", "-az", str(training_file), f"{remote_host}:{remote_data_dir}/"],
+                timeout=60, capture_output=True
+            )
+            # Run training remotely on CPU (64GB RAM handles BF16 14B fine)
+            remote_dataset = f"{remote_data_dir}/{training_file.name}"
+            cmd = [
+                "ssh", remote_host,
+                f"{remote_venv} {remote_script}"
+                f" --model {base_model}"
+                f" --dataset {remote_dataset}"
+                f" --output {remote_output}"
+                f" --epochs 3 --batch-size 1 --val-split 0.2"
+                f" --early-stopping-patience 2 --min-samples-for-split 10"
+                f" --cpu"
+            ]
+        else:
+            logger.info("Training locally on BEAST")
+            train_script = self.base_dir / "learning-pipeline" / "scripts" / "train_lora.py"
+            cmd = [
+                sys.executable, str(train_script),
+                "--model", base_model,
+                "--dataset", str(training_file),
+                "--output", str(version_dir / "lora"),
+                "--epochs", "3",
+                "--batch-size", "1",
+                "--grad-accum", "8",
+                "--val-split", "0.2",
+                "--early-stopping-patience", "2",
+                "--min-samples-for-split", "10",
+            ]
 
         try:
             result = subprocess.run(
@@ -739,6 +782,14 @@ class ContinuousLearner:
                 timeout=3600,  # 1 hour max
                 cwd=str(self.base_dir)
             )
+
+            # If remote, pull back the LoRA weights
+            if use_remote and result.returncode == 0:
+                (version_dir / "lora").mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    ["rsync", "-az", f"{remote_host}:{remote_output}/", str(version_dir / "lora") + "/"],
+                    timeout=120, capture_output=True
+                )
 
             if result.returncode != 0:
                 logger.error(f"Training failed: {result.stderr}")
@@ -837,8 +888,8 @@ class ContinuousLearner:
             return False
 
         # Update symlink for llama-server
-        models_dir = self.models_dir / "foundation_7b_export"
-        current_link = models_dir / "HiveCoder-7B-current.gguf"
+        models_dir = self.models_dir / "foundation_14b_export"
+        current_link = models_dir / "HiveCoder-current.gguf"
 
         # Create symlink to new version
         if current_link.exists():

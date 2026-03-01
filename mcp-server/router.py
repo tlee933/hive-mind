@@ -72,15 +72,19 @@ def classify_query(
     model_hint: str | None = None,
     reason_mode: bool = False,
     available_models: dict | None = None,
-    default_model: str = "hivecoder-7b",
+    default_model: str = "hivecoder",
 ) -> RoutingDecision:
     """Classify a user query and return a routing decision.
 
+    With a single model (Qwen3-14B), routing always returns the same model.
+    Heuristic scoring is kept for logging/analytics. reason_mode flags the
+    decision so the HTTP server can toggle Qwen3's thinking mode.
+
     Priority order:
     1. Explicit model_hint from client
-    2. reason_mode=True → always R1
-    3. Heuristic keyword/pattern scoring
-    4. Default → fast model (HiveCoder)
+    2. reason_mode=True → same model, flagged for thinking mode
+    3. Heuristic keyword/pattern scoring (for analytics)
+    4. Default → HiveCoder
 
     Args:
         query: The user's message text.
@@ -89,15 +93,6 @@ def classify_query(
         available_models: Dict of model configs from config.yaml.
         default_model: Fallback model ID.
     """
-    # Find the reasoning model (first model with "reasoning" capability)
-    reasoning_model = default_model
-    if available_models:
-        for mid, mcfg in available_models.items():
-            caps = mcfg.get("capabilities", [])
-            if "reasoning" in caps:
-                reasoning_model = mid
-                break
-
     # 1. Explicit hint — highest priority
     if model_hint:
         if available_models and model_hint in available_models:
@@ -113,15 +108,15 @@ def classify_query(
             confidence=0.5,
         )
 
-    # 2. Reason mode — always R1
+    # 2. Reason mode — same model, flagged for thinking mode
     if reason_mode:
         return RoutingDecision(
-            model_id=reasoning_model,
+            model_id=default_model,
             reason="reason_mode",
             confidence=1.0,
         )
 
-    # 3. Heuristic scoring
+    # 3. Heuristic scoring (for logging/analytics)
     code_score = _count_signals(query, CODE_SIGNALS)
     reasoning_score = _count_signals(query, REASONING_SIGNALS)
 
@@ -135,23 +130,20 @@ def classify_query(
 
     total = code_score + reasoning_score
     if total == 0:
-        # No signals — default to fast model
         return RoutingDecision(
             model_id=default_model,
             reason="no_signals",
             confidence=0.5,
         )
 
-    # Reasoning wins only if it clearly dominates
     if reasoning_score > code_score and reasoning_score > 1:
         confidence = min(reasoning_score / max(total, 1), 1.0)
         return RoutingDecision(
-            model_id=reasoning_model,
+            model_id=default_model,
             reason=f"reasoning_signals({reasoning_score}>{code_score})",
             confidence=round(confidence, 2),
         )
 
-    # Code wins or tie — fast model
     confidence = min(code_score / max(total, 1), 1.0)
     return RoutingDecision(
         model_id=default_model,

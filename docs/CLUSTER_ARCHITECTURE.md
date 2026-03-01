@@ -228,18 +228,20 @@ Auth: (same password as cluster)
 
 ## Scaling Strategy
 
-### Current (Phase 1)
+### Phase 1 (Complete)
 - 3 masters on BEAST
 - 3 replicas on BEAST
 - 3 sentinels on NAS
 
-### Phase 2 (Add DELL)
-- Keep 3 masters on BEAST
-- Move replicas to DELL (3 × 12GB VRAM nodes)
-- Add 3 sentinels on DELL
-- **Total**: 6 sentinels, better distribution
+### Phase 2 (Complete — Feb 28, 2026)
+- 3 masters on BEAST (192.168.1.100:7000-7002)
+- 3 replicas on alderlake (192.168.1.10:7003-7005, podman)
+- 3 sentinels on NAS (192.168.1.7:26379-26381)
+- Old BEAST replicas removed, old R720xd replaced by alderlake (i7-12700, 64GB)
+- `cluster-announce-ip` configured for cross-node communication
+- Firewall ports: 7000-7005 + 17000-17005 (bus) on both nodes
 
-### Phase 3 (More compute nodes)
+### Phase 3 (Future)
 - Add more masters (resharding required)
 - Add replicas on new nodes
 - Sentinel quorum increases with more nodes
@@ -315,5 +317,5 @@ cp -r /mnt/build/redis-cluster/node-*/data/dump.rdb \
 
 ---
 
-**Status**: Cluster deployed, Sentinel ready to deploy
-**Next**: Build static Redis binary for NAS Sentinel
+**Status**: Phase 2 complete — cross-node replication active (BEAST masters → alderlake replicas)
+**Next**: Phase 5 — AI Suricata integration, training offload to alderlake

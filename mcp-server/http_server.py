@@ -618,7 +618,7 @@ async def get_stats(request: Request):
 
 @app.post("/llm/generate")
 async def llm_generate(body: LLMGenerateRequest, request: Request):
-    """Generate text using HiveCoder-7B"""
+    """Generate text using HiveCoder"""
     hive_mind = _hm(request)
     try:
         result = await hive_mind.llm_generate(
@@ -638,7 +638,7 @@ async def llm_generate(body: LLMGenerateRequest, request: Request):
 
 @app.post("/llm/code-assist")
 async def llm_code_assist(body: LLMCodeAssistRequest, request: Request):
-    """Get code assistance from HiveCoder-7B"""
+    """Get code assistance from HiveCoder"""
     hive_mind = _hm(request)
     try:
         result = await hive_mind.llm_code_assist(
@@ -656,7 +656,7 @@ async def llm_code_assist(body: LLMCodeAssistRequest, request: Request):
 
 @app.post("/llm/complete")
 async def llm_complete(body: LLMCompleteRequest, request: Request):
-    """Code completion using HiveCoder-7B"""
+    """Code completion using HiveCoder"""
     hive_mind = _hm(request)
     try:
         result = await hive_mind.llm_complete(
@@ -674,7 +674,7 @@ async def llm_complete(body: LLMCompleteRequest, request: Request):
 
 @app.get("/llm/status")
 async def llm_status(request: Request):
-    """Check HiveCoder-7B status"""
+    """Check HiveCoder status"""
     hive_mind = _hm(request)
     stats = await hive_mind.get_stats()
     return {
@@ -691,7 +691,7 @@ class ChatMessage(BaseModel):
     content: str
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "HiveCoder-7B"
+    model: str = "HiveCoder"
     messages: List[ChatMessage]
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
@@ -724,7 +724,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
         # --- Model routing ---
         inference_config = hive_mind.config.get('inference', {})
         models_config = inference_config.get('models', {})
-        default_model = inference_config.get('default_model', 'hivecoder-7b')
+        default_model = inference_config.get('default_model', 'hivecoder')
 
         if models_config and user_query:
             decision = classify_query(
@@ -766,6 +766,11 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
                 messages.append({"role": msg.role, "content": msg.content})
 
         # Build final system prompt: model config + client context + RAG facts
+        # Qwen3 thinking mode: /no_think in system prompt for fast mode,
+        # /think prepended to user message for deep reasoning mode
+        if not body.reason_mode:
+            base_system = "/no_think\n" + base_system
+
         system_parts = [base_system]
         if client_system_parts:
             system_parts.extend(client_system_parts)
@@ -773,6 +778,13 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
             system_parts.append(facts_context)
 
         messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
+
+        # For reason_mode, prepend /think to the last user message
+        if body.reason_mode:
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i]["role"] == "user":
+                    messages[i] = {**messages[i], "content": "/think\n" + messages[i]["content"]}
+                    break
 
         # Server-side context pruning — prune to fit model's context window
         # This is the authoritative pruning; clients can send full history
@@ -876,7 +888,7 @@ async def openai_list_models(request: Request):
     else:
         data = [
             {
-                "id": "HiveCoder-7B",
+                "id": "HiveCoder",
                 "object": "model",
                 "created": 1700000000,
                 "owned_by": "hive-mind",

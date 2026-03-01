@@ -21,13 +21,13 @@ CONFIG_FILE="$PROJECT_DIR/../config.yaml"
 VENV_PYTHON="$PROJECT_DIR/../.venv/bin/python3"
 
 # Training parameters
-BASE_MODEL="Qwen/Qwen2.5-0.5B"
+BASE_MODEL="Qwen/Qwen3-14B"
 MIN_EXAMPLES=10  # Minimum examples needed to train
 LORA_R=8
 LORA_ALPHA=16
 EPOCHS=3
-BATCH_SIZE=auto  # Dynamic based on available VRAM
-GRAD_ACCUM=4
+BATCH_SIZE=1     # Qwen3-14B BF16 leaves minimal VRAM headroom
+GRAD_ACCUM=8     # Compensate for small batch with more accumulation
 LEARNING_RATE=2e-4
 VRAM_OVERHEAD=0.25  # Reserve 25% VRAM overhead
 
@@ -69,9 +69,11 @@ if [ ! -x "$VENV_PYTHON" ]; then
     error_exit "Python venv not found: $VENV_PYTHON"
 fi
 
-# Check Redis connection
+# Check Redis connection (retry up to 5 times — Docker containers may still be starting)
 log "🔌 Testing Redis connection..."
-if ! "$VENV_PYTHON" -c "
+REDIS_OK=0
+for attempt in 1 2 3 4 5; do
+    if "$VENV_PYTHON" -c "
 import sys
 sys.path.insert(0, '$PROJECT_DIR')
 from redis.cluster import RedisCluster, ClusterNode
@@ -84,7 +86,16 @@ client = RedisCluster(startup_nodes=startup_nodes, password=redis_config['passwo
 client.ping()
 print('✅ Redis connected')
 " 2>/dev/null; then
-    error_exit "Cannot connect to Redis cluster"
+        REDIS_OK=1
+        break
+    fi
+    log "⏳ Redis not ready (attempt $attempt/5), waiting 30s..."
+    sleep 30
+done
+if [ "$REDIS_OK" -ne 1 ]; then
+    log "⚠️  Cannot connect to Redis cluster after 5 attempts"
+    log "Skipping training this run. Redis may be down for maintenance."
+    exit 0
 fi
 
 # Step 1: Collect data from Redis
@@ -117,6 +128,16 @@ fi
 log "🧠 Step 2: Training model with LoRA..."
 MODEL_OUTPUT="$MODELS_DIR/model_${TIMESTAMP}"
 
+# Stop llama-server to free GPU VRAM for training
+LLM_WAS_RUNNING=0
+if systemctl is-active --quiet hivecoder-llm.service 2>/dev/null; then
+    log "⏸️  Stopping hivecoder-llm.service to free GPU VRAM..."
+    sudo systemctl stop hivecoder-llm.service
+    LLM_WAS_RUNNING=1
+    sleep 5
+fi
+
+TRAIN_EXIT=0
 "$VENV_PYTHON" "$SCRIPT_DIR/train_lora.py" \
     --model "$BASE_MODEL" \
     --dataset "$DATASET_FILE" \
@@ -127,7 +148,17 @@ MODEL_OUTPUT="$MODELS_DIR/model_${TIMESTAMP}"
     --batch-size "$BATCH_SIZE" \
     --grad-accum "$GRAD_ACCUM" \
     --lr "$LEARNING_RATE" \
-    --vram-overhead "$VRAM_OVERHEAD" || error_exit "Training failed"
+    --vram-overhead "$VRAM_OVERHEAD" || TRAIN_EXIT=$?
+
+# Restart llama-server regardless of training outcome
+if [ "$LLM_WAS_RUNNING" -eq 1 ]; then
+    log "▶️  Restarting hivecoder-llm.service..."
+    sudo systemctl start hivecoder-llm.service
+fi
+
+if [ "$TRAIN_EXIT" -ne 0 ]; then
+    error_exit "Training failed"
+fi
 
 # Step 3: Verify model was saved
 log "✅ Step 3: Verifying model..."

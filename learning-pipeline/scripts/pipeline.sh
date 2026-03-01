@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 CONFIG_PATH="${CONFIG_PATH:-/workspace/config.yaml}"
 DATA_DIR="${DATA_DIR:-/workspace/data}"
 MODELS_DIR="${MODELS_DIR:-/workspace/models}"
-BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}"
+BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-14B}"
 
 # Functions
 log_info() {

@@ -10,7 +10,7 @@ data:
 
 # Model
 model:
-  base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"  # or use local: /mnt/nas-moar/models/Qwen2.5-Coder-7B
+  base_model: "Qwen/Qwen3-14B"
   model_type: "causal_lm"
   torch_dtype: "bfloat16"  # gfx1201 supports bf16 at 125 TFLOPS
   device_map: "auto"

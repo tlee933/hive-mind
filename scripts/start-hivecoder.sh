@@ -1,5 +1,5 @@
 #!/bin/bash
-# HiveCoder-7B LLM Server startup script
+# HiveCoder (Qwen3-14B) LLM Server startup script
 # This script ensures proper ROCm environment for llama-server
 
 # ROCm environment
@@ -13,20 +13,17 @@ export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
 export GPU_MAX_HW_QUEUES=8
 export HSA_ENABLE_SDMA=0
 
-# Context size (8K tokens)
-export LLAMA_ARG_CTX_SIZE=8192
+# Model path - uses symlink for hot-swap deployments (LoRA-trained versions)
+MODEL_PATH="/var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_14b_export/HiveCoder-current.gguf"
 
-# Model path - uses symlink for hot-swap deployments
-MODEL_PATH="/var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_7b_export/HiveCoder-7B-current.gguf"
-
-# Fallback to original if symlink doesn't exist
+# Fallback to base Qwen3-14B if symlink doesn't exist
 if [ ! -f "$MODEL_PATH" ]; then
-    MODEL_PATH="/var/mnt/build/MCP/hive-mind/learning-pipeline/models/foundation_7b_export/HiveCoder-7B-Q5_K_M.gguf"
+    MODEL_PATH="/home/hashcat/Models/Qwen3-14B-Q4_K_M.gguf"
 fi
 
 # Start llama-server
-# Note: context (-c) is divided among parallel slots (-np)
-# 32768 / 4 slots = 8192 per request
+# Context: 32768 / 2 slots = 16384 per request
+# KV cache: q8_0 cuts memory bandwidth ~50% vs f16, negligible quality loss
 exec /usr/local/bin/llama-server \
     -m "$MODEL_PATH" \
     --host 127.0.0.1 \
@@ -34,4 +31,8 @@ exec /usr/local/bin/llama-server \
     -ngl 99 \
     -c 32768 \
     --threads 12 \
-    -np 4
+    -np 2 \
+    --flash-attn on \
+    --cont-batching \
+    -ctk q8_0 \
+    -ctv q8_0

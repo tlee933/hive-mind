@@ -28,6 +28,7 @@ from transformers import (
 from datasets import load_dataset
 from peft import (
     LoraConfig,
+    prepare_model_for_kbit_training,
     get_peft_model,
     TaskType
 )
@@ -108,9 +109,13 @@ class LoRATrainer:
         val_split: float = 0.2,
         early_stopping_patience: int = 2,
         min_samples_for_split: int = 10,
+        quantize: bool = False,
+        cpu: bool = False,
     ):
         """Initialize LoRA trainer"""
         self.model_name = model_name
+        self.quantize = quantize
+        self.cpu = cpu
         self.dataset_path = Path(dataset_path)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -138,8 +143,9 @@ class LoRATrainer:
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
             learning_rate=learning_rate,
-            fp16=False,  # Use bf16 for ROCm
-            bf16=True,
+            fp16=False,
+            bf16=not cpu,  # bf16 for GPU, fp32 for CPU
+            use_cpu=cpu,
             logging_steps=10,
             save_steps=100,
             save_total_limit=3,
@@ -173,16 +179,31 @@ class LoRATrainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Load model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
+        load_kwargs = dict(
             torch_dtype=torch.bfloat16,
-            device_map="auto",
-            trust_remote_code=True
+            device_map="cpu" if self.cpu else "auto",
+            trust_remote_code=True,
+        )
+        if self.cpu:
+            logger.info("CPU training mode: loading model to CPU")
+        if self.quantize:
+            from transformers import BitsAndBytesConfig
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            logger.info("QLoRA mode: loading model in 4-bit")
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name, **load_kwargs
         )
 
-        # Prepare for LoRA (skip kbit prep since we're using BF16, not quantized)
         # Enable gradient checkpointing for memory efficiency
         self.model.gradient_checkpointing_enable()
+        if self.quantize:
+            self.model = prepare_model_for_kbit_training(self.model)
         self.model = get_peft_model(self.model, self.lora_config)
 
         # Print trainable parameters
@@ -338,6 +359,10 @@ def main():
                        help='Early stopping patience in epochs (default 2, 0 to disable)')
     parser.add_argument('--min-samples-for-split', type=int, default=10,
                        help='Minimum samples required to create a val split (default 10)')
+    parser.add_argument('--quantize', action='store_true',
+                       help='Use QLoRA (4-bit quantized base model) for low-VRAM GPUs')
+    parser.add_argument('--cpu', action='store_true',
+                       help='Force CPU training (for machines without compatible GPU)')
 
     args = parser.parse_args()
 
@@ -366,6 +391,8 @@ def main():
         val_split=args.val_split,
         early_stopping_patience=args.early_stopping_patience,
         min_samples_for_split=args.min_samples_for_split,
+        quantize=args.quantize,
+        cpu=args.cpu,
     )
 
     metrics = trainer.run()

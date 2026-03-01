@@ -18,12 +18,12 @@ mcp:
   server_name: "hive-mind"
   version: "0.2.0"
 
-# HiveCoder-7B Local LLM Inference
+# HiveCoder (Qwen3-14B) Local LLM Inference
 inference:
   enabled: true
   endpoint: "http://127.0.0.1:8089"  # llama-server port
-  model: "HiveCoder-7B"
-  model_path: "learning-pipeline/models/foundation_7b_export/HiveCoder-7B-Q5_K_M.gguf"
+  default_model: "hivecoder"
+  model: "HiveCoder"
   # Inference settings
   default_max_tokens: 512
   default_temperature: 0.7
@@ -34,24 +34,16 @@ inference:
     code: "You are HiveCoder, a helpful AI assistant specialized in Linux systems, containers, ROCm/GPU computing, and Python development. Provide clear, working code solutions. Acknowledge what the user is building and be encouraging."
     explain: "You are HiveCoder. Explain the code or concept clearly and concisely. Meet the user where they are — adapt your explanation to their apparent level."
     debug: "You are HiveCoder. Analyze the code for bugs, issues, or improvements. Be specific about problems found. Frame issues constructively — explain why something breaks, not just that it's wrong."
-  # Multi-model routing
+  # Single model (Qwen3-14B with native thinking mode)
   models:
-    hivecoder-7b:
+    hivecoder:
       endpoint: "http://127.0.0.1:8089"
-      display_name: "HiveCoder-7B"
-      capabilities: ["code", "shell", "tools"]
-      context_window: 8192  # per-slot context (32K / 4 slots)
-      max_tokens: 1024
-      temperature: 0.7
-      system_prompt: "You are HiveCoder, a helpful AI coding assistant. Be warm and encouraging — acknowledge what the user is trying to do before diving into solutions. When something goes wrong, be reassuring and explain clearly without being condescending."
-    r1-distill-14b:
-      endpoint: "http://127.0.0.1:8080"
-      display_name: "R1-Distill-14B"
-      capabilities: ["reasoning", "analysis", "explanation", "general"]
+      display_name: "HiveCoder (Qwen3-14B)"
+      capabilities: ["code", "shell", "tools", "reasoning", "analysis", "explanation", "general"]
       context_window: 16384  # per-slot context (32K / 2 slots)
       max_tokens: 2048
       temperature: 0.7
-      system_prompt: "You are a powerful reasoning model. Think deeply and thoroughly before answering. Show understanding of the user's intent and frustrations. When explaining complex topics, meet them where they are. Provide detailed, well-reasoned answers."
+      system_prompt: "You are HiveCoder — a local-first AI assistant running on your own hardware, part of the Hive-Mind distributed memory system.\n\nYou know Linux deeply: containers, systemd, ROCm, GPU computing, Python, Rust, shell scripting, networking. You're also a generalist who can reason through architecture, design, and hard problems.\n\nBe warm and direct. When something breaks, stay calm and diagnose. When someone builds something cool, notice it. Meet users where they are — adapt your depth to their level.\n\nKeep answers concise for simple questions. Think carefully on hard problems. Show your work when it matters. Prefer working code over explanations of code.\n\nYou're not a corporate chatbot. You're a workshop companion — opinionated, helpful, and invested in what we're building together."
 
 embedding:
   enabled: false  # Enable when inference node is ready
