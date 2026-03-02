@@ -1108,17 +1108,134 @@ Also set up Obsidian (Flatpak) with a vault at `~/Documents/Vault` containing sy
 
 ---
 
+## Days 22-25: Qwen3-14B Migration + QLoRA (February 22-25, 2026)
+
+### The Big Model Switch
+
+Replaced the dual-LLM setup (HiveCoder-7B + R1-Distill-14B) with a single **Qwen3-14B** model. Qwen3-14B handles both code and reasoning tasks well enough to eliminate the routing complexity, and frees VRAM headroom for training.
+
+### transformers 5.0 Compatibility
+
+Upgraded to transformers 5.0, which introduced breaking changes:
+- `no_cuda` argument removed from `TrainingArguments` — replaced with `use_cpu`
+- Both training paths (automated + continuous) updated
+
+### bitsandbytes QLoRA from Source
+
+Built bitsandbytes 0.50.0.dev0 from source for ROCm/gfx1201 (RDNA4):
+```bash
+cmake -B build -DCOMPUTE_BACKEND=hip -DBNB_ROCM_ARCH=gfx1201
+```
+
+Enabled 4-bit QLoRA training (NF4 + double quantization) on Qwen3-14B — uses ~8-10GB VRAM after loading vs ~28GB for BF16 LoRA. Both modes still require stopping the LLM server due to VRAM peak during model loading.
+
+### Training Pipeline Fixes
+
+- **Batch size**: Fixed to `batch_size=1, grad_accum=8` — auto-calculation didn't account for 14B model weight size
+- **Learning daemon**: Fixed batch size in continuous_learning.py to match
+- **LLM restart gap**: Fixed timing issue where LLM server wasn't fully ready after training restart
+
+### Model Registry
+
+Model version bumped to **0.9.5** through automated continuous training cycles on Qwen3-14B.
+
+### Files Changed
+
+- `learning-pipeline/scripts/train_lora.py` — `use_cpu` instead of `no_cuda`, `--quantize` flag for QLoRA, batch_size=1
+- `learning-pipeline/scripts/continuous_learning.py` — batch size fix, LLM restart timing
+- `learning-pipeline/scripts/automated_training.sh` — batch_size=1, grad_accum=8, Qwen3-14B target
+
+---
+
+## Days 26-28: Talos AI Suricata (February 28 - March 1, 2026)
+
+### A New Project
+
+Built **Talos AI Suricata** — an autonomous network threat analysis system for OPNsense. Suricata IPS generates thousands of alerts daily, but most are noise. Talos uses HiveCoder (Qwen3-14B) to classify each alert, correlate attack patterns, and automatically block confirmed threats via the OPNsense firewall API.
+
+**Repo**: [talos-ai-suricata](https://github.com/tlee933/talos-ai-suricata)
+
+### Architecture
+
+```
+OPNsense (Suricata IPS)
+    |  syslog (TCP 5140)
+    v
+eve_receiver (alderlake)
+    |  Redis push
+    v
+ai_suricata daemon (alderlake)
+    |  LLM call
+    v
+HiveCoder / Qwen3-14B (aurora :8090)
+    |  structured JSON
+    v
+4-tier auto-block --> OPNsense API --> ai_blocklist alias
+```
+
+### Multi-Node Deployment
+
+Deployed the 3 Talos services (eve_receiver, ai_suricata, dashboard) to **alderlake** as a podman container, keeping the GPU and Redis on aurora. This was the first real multi-node deployment — alderlake calls aurora's LLM and Redis over the LAN.
+
+| Node | Role |
+|------|------|
+| **alderlake** | Talos AI Suricata container (eve_receiver, ai_suricata, dashboard) |
+| **aurora** | HiveCoder LLM (:8090), Redis cluster (7000-7002), training pipeline |
+| **NAS** | Persistent EVE logs, AI analysis results, model backups |
+| **OPNsense** | Suricata IPS, firewall, DNSBL, DNS redirect |
+
+### Security Hardening
+
+- 24+ scanner CIDRs blocked at firewall level
+- 24 dangerous inbound ports blocked (SSH, SMB, RDP, Redis, Docker API, etc.)
+- ICMP blocking, RFC1918 anti-spoofing
+- 7 DNSBL blocklists (Hagezi, ThreatFox, Steven Black)
+- DNS redirect (force all LAN DNS through OPNsense)
+- Suricata detect profile set to HIGH
+
+### alderlake: The New Second Node
+
+The R720xd was replaced by **alderlake** — an i7-12700 (8P+4E, 20 threads) with 64GB RAM running Fedora CoreOS. Already running Redis replicas and the embedding service, now also hosts Talos AI Suricata.
+
+### Backup Script Fix
+
+Fixed the `hivecoder-backup.service` failure (rsync exit code 3 — missing intermediate directories). Added `mkdir -p` before rsync and a cleanup routine for old training logs, data, and model checkpoints.
+
+---
+
+## Milestones (updated)
+
+- [x] **Phase 1**: Redis Cluster (Feb 1)
+- [x] **Phase 2**: MCP Server (Feb 1)
+- [x] **Phase 2.5**: Local LLM Inference (Feb 2)
+- [x] **Phase 2.7**: Dual-Mode Access (Feb 3)
+- [x] **Phase 4**: Learning Pipeline (Feb 5)
+- [x] **Phase 4.5**: Smart Optimizer (Feb 7)
+- [x] **HiveCoder-7B**: First Foundation Model (Feb 8)
+- [x] **Phase 5**: HiveCoder Integration (Feb 8)
+- [x] **Phase 6**: Multi-Node — R720xd / alderlake (Feb 8-9)
+- [x] **Phase 7**: Continuous Learning (Feb 8)
+- [x] **Phase 8**: PyTorch 2.10 + ROCm 7.12 Native (Feb 14)
+- [x] **Phase 9**: Active Learning — RAG Retrieval Mining (Feb 15)
+- [x] **Phase 10**: First Continuous Training on 7B — v0.9.1 (Feb 16)
+- [x] **Phase 11**: Qwen3-14B Migration + QLoRA (Feb 22-25)
+- [x] **Phase 12**: Talos AI Suricata — Autonomous Threat Defense (Feb 28 - Mar 1)
+- [x] **Phase 13**: 4-Node Architecture — Aurora, Alderlake, NAS, OPNsense (Mar 1)
+
+---
+
 ## Credits
 
 Built with:
-- 🧠 Claude Code (Opus 4.6)
-- ☕ A lot of coffee
-- 🔥 Pure determination
+- Claude Code (Opus 4.6)
+- A lot of coffee
+- Pure determination
 
 **Status**: Production Ready
-**Date**: February 17, 2026
+**Version**: 0.9.5
+**Date**: March 1, 2026
 **Author**: hashcat
 
 ---
 
-*The hive never forgets.* 🐝
+*The hive never forgets.*
