@@ -207,8 +207,8 @@ Every LLM call is enriched with relevant facts from the knowledge base:
 
 | Node | Role | Specs |
 |------|------|-------|
-| **aurora** | GPU inference + training, Redis primary | AMD Ryzen 9, R9700 32GB VRAM, ROCm 7.12, 32GB RAM |
-| **alderlake** | Talos AI Suricata, Redis replicas, embeddings | i7-12700 (20T), 64GB RAM, Fedora CoreOS |
+| **aurora** | GPU inference + training, Redis primary | AMD Ryzen 9, PowerColor AI PRO R9700 32GB VRAM, ROCm 7.12, 32GB RAM |
+| **alderlake** | Talos AI Suricata, Redis replicas, embeddings | i7-12700 (20T), 64GB RAM, PowerColor Red Devil RX 6700 XT 12GB VRAM, Fedora CoreOS |
 | **NAS** | Persistent storage (EVE logs, models, backups) | Synology, NFS, 11TB |
 | **OPNsense** | Firewall, Suricata IPS, DNSBL | 192.168.1.1 |
 
