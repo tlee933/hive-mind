@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Hive-Mind architecture block diagram using Pillow."""
+"""Hive-Mind + AI Suricata full architecture block diagram using Pillow."""
 from PIL import Image, ImageDraw, ImageFont
 import os
 
-W, H = 3400, 1480
+W, H = 3800, 2200
 BG = (18, 18, 28)
 
 # Color palette
@@ -21,6 +21,7 @@ C_WHITE    = (230, 230, 240)
 C_DIM      = (160, 165, 180)
 C_CYAN     = (60, 200, 220)
 C_YELLOW   = (220, 200, 50)
+C_CRIMSON  = (180, 40, 60)
 
 def find_font(size):
     paths = [
@@ -29,7 +30,6 @@ def find_font(size):
         "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
         "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
     for p in paths:
@@ -49,53 +49,50 @@ def find_font_regular(size):
             return ImageFont.truetype(p, size)
     return ImageFont.load_default()
 
-font_title = find_font(52)
-font_subtitle = find_font_regular(24)
-font_heading = find_font(26)
-font_body = find_font_regular(21)
-font_small = find_font_regular(17)
-font_label = find_font(17)
-font_port = find_font(20)
+font_title = find_font(48)
+font_subtitle = find_font_regular(22)
+font_heading = find_font(24)
+font_body = find_font_regular(19)
+font_small = find_font_regular(16)
+font_label = find_font(16)
+font_port = find_font(18)
+font_hw = find_font(20)
 
 img = Image.new('RGB', (W, H), BG)
 draw = ImageDraw.Draw(img)
 
+import math
 
 def rounded_rect(x, y, w, h, color, radius=16, border=None, border_w=2):
-    r = radius
-    draw.rounded_rectangle([x, y, x+w, y+h], radius=r, fill=color)
+    draw.rounded_rectangle([x, y, x+w, y+h], radius=radius, fill=color)
     if border:
-        draw.rounded_rectangle([x, y, x+w, y+h], radius=r, outline=border, width=border_w)
-
+        draw.rounded_rectangle([x, y, x+w, y+h], radius=radius, outline=border, width=border_w)
 
 def box(x, y, w, h, label, sublabel, color, text_color=C_WHITE, border=None):
     rounded_rect(x, y, w, h, color, border=border, border_w=3 if border else 2)
     bbox = draw.textbbox((0, 0), label, font=font_heading)
     tw = bbox[2] - bbox[0]
     if sublabel:
-        draw.text((x + (w - tw) // 2, y + h // 2 - 20), label, fill=text_color, font=font_heading)
+        draw.text((x + (w - tw) // 2, y + h // 2 - 18), label, fill=text_color, font=font_heading)
         bbox2 = draw.textbbox((0, 0), sublabel, font=font_small)
         tw2 = bbox2[2] - bbox2[0]
         draw.text((x + (w - tw2) // 2, y + h // 2 + 8), sublabel, fill=C_DIM, font=font_small)
     else:
-        draw.text((x + (w - tw) // 2, y + (h - 26) // 2), label, fill=text_color, font=font_heading)
-
+        draw.text((x + (w - tw) // 2, y + (h - 24) // 2), label, fill=text_color, font=font_heading)
 
 def small_box(x, y, w, h, label, sublabel, color, text_color=C_WHITE, border=None):
     rounded_rect(x, y, w, h, color, radius=10, border=border, border_w=2 if border else 1)
     bbox = draw.textbbox((0, 0), label, font=font_body)
     tw = bbox[2] - bbox[0]
     if sublabel:
-        draw.text((x + (w - tw) // 2, y + h // 2 - 16), label, fill=text_color, font=font_body)
+        draw.text((x + (w - tw) // 2, y + h // 2 - 14), label, fill=text_color, font=font_body)
         bbox2 = draw.textbbox((0, 0), sublabel, font=font_small)
         tw2 = bbox2[2] - bbox2[0]
         draw.text((x + (w - tw2) // 2, y + h // 2 + 6), sublabel, fill=C_DIM, font=font_small)
     else:
-        draw.text((x + (w - tw) // 2, y + (h - 20) // 2), label, fill=text_color, font=font_body)
-
+        draw.text((x + (w - tw) // 2, y + (h - 18) // 2), label, fill=text_color, font=font_body)
 
 def arrow(x1, y1, x2, y2, color=C_GRAY_LT, width=3, dashed=False):
-    import math
     if dashed:
         dx = x2 - x1
         dy = y2 - y1
@@ -110,9 +107,8 @@ def arrow(x1, y1, x2, y2, color=C_GRAY_LT, width=3, dashed=False):
             pos = end + gap_len
     else:
         draw.line([(x1, y1), (x2, y2)], fill=color, width=width)
-
     angle = math.atan2(y2 - y1, x2 - x1)
-    arr_len = 14
+    arr_len = 12
     arr_angle = 0.4
     ax1 = x2 - arr_len * math.cos(angle - arr_angle)
     ay1 = y2 - arr_len * math.sin(angle - arr_angle)
@@ -120,19 +116,16 @@ def arrow(x1, y1, x2, y2, color=C_GRAY_LT, width=3, dashed=False):
     ay2 = y2 - arr_len * math.sin(angle + arr_angle)
     draw.polygon([(x2, y2), (ax1, ay1), (ax2, ay2)], fill=color)
 
-
 def arrow_label(x1, y1, x2, y2, label, color=C_GRAY_LT, width=3, dashed=False, offset=(0, -14)):
     arrow(x1, y1, x2, y2, color, width, dashed)
     mx = (x1 + x2) // 2 + offset[0]
     my = (y1 + y2) // 2 + offset[1]
     draw.text((mx, my), label, fill=color, font=font_small)
 
-
 def section_bg(x, y, w, h, label, color):
     bg_color = (color[0] // 8, color[1] // 8, color[2] // 8)
     rounded_rect(x, y, w, h, bg_color, radius=20, border=color, border_w=2)
     draw.text((x + 16, y + 8), label, fill=color, font=font_label)
-
 
 def port_badge(x, y, port, color=C_CYAN):
     text = f":{port}"
@@ -142,272 +135,357 @@ def port_badge(x, y, port, color=C_CYAN):
     rounded_rect(x, y, tw + 16, th + 10, (30, 35, 50), radius=8, border=color, border_w=2)
     draw.text((x + 8, y + 4), text, fill=color, font=font_port)
 
-
 # ============================================================
 # Title
 # ============================================================
-draw.text((W // 2 - 300, 20), "Hive-Mind Architecture", fill=C_WHITE, font=font_title)
-draw.text((W // 2 - 250, 78), "Distributed AI Memory + Semantic RAG + Dual LLM", fill=C_DIM, font=font_subtitle)
+draw.text((W // 2 - 420, 18), "Hive-Mind + AI Suricata Architecture", fill=C_WHITE, font=font_title)
+draw.text((W // 2 - 360, 72), "Distributed AI: Memory, RAG, Threat Analysis, Continuous Learning", fill=C_DIM, font=font_subtitle)
 
 # ============================================================
-# Section backgrounds
+# HARDWARE NODES (top strip)
 # ============================================================
-# Top-left: Clients
-section_bg(40, 120, 520, 340, "CLIENTS", C_WHITE)
+hw_y = 108
+section_bg(40, hw_y, 1160, 100, "AURORA (192.168.1.100)", C_TEAL)
+draw.text((60, hw_y + 32), "Ryzen 9 5900X  |  32GB RAM  |  R9700 32GB VRAM  |  ROCm 7.12  |  Fedora 43 Kinoite", fill=C_DIM, font=font_small)
+draw.text((60, hw_y + 55), "HiveCoder LLM  |  Redis Cluster (7000-7005)  |  Training Pipeline  |  MCP Server", fill=C_TEAL, font=font_small)
 
-# Middle-left: MCP Tools
-section_bg(40, 500, 760, 520, "MCP TOOLS (13 endpoints)", C_BLUE)
+section_bg(1240, hw_y, 1160, 100, "ALDERLAKE (192.168.1.10)", C_BLUE)
+draw.text((1260, hw_y + 32), "i7-12700 (20T)  |  64GB RAM  |  6700XT 12GB (idle)  |  Fedora CoreOS", fill=C_DIM, font=font_small)
+draw.text((1260, hw_y + 55), "AI Suricata (container)  |  Redis Replicas (7003-7005)  |  Embedding Server", fill=C_BLUE_LT, font=font_small)
 
-# Center: Redis
-section_bg(860, 120, 680, 900, "REDIS CLUSTER", C_RED)
+section_bg(2440, hw_y, 620, 100, "NAS (192.168.1.7)", C_GRAY_LT)
+draw.text((2460, hw_y + 32), "ReadyNAS  |  11TB  |  NFS", fill=C_DIM, font=font_small)
+draw.text((2460, hw_y + 55), "EVE logs  |  Model archives  |  Git repos", fill=C_GRAY_LT, font=font_small)
 
-# Right-top: LLM Inference
-section_bg(1600, 120, 760, 520, "LLM INFERENCE (GPU)", C_TEAL)
-
-# Right-bottom: Training
-section_bg(1600, 690, 760, 330, "CONTINUOUS LEARNING", C_ORANGE)
-
-# Bottom: Embedding + RAG
-section_bg(40, 1080, 760, 340, "EMBEDDING ENGINE (CPU)", C_PURPLE)
-section_bg(860, 1080, 680, 340, "RAG PIPELINE", C_GREEN)
-section_bg(1600, 1080, 760, 340, "MULTI-NODE (planned)", C_GRAY_LT)
+section_bg(3100, hw_y, 660, 100, "OPNsense (192.168.1.1)", C_RED)
+draw.text((3120, hw_y + 32), "Suricata 8.0.3 IPS (Netmap)  |  Unbound DNS + DNSBL", fill=C_DIM, font=font_small)
+draw.text((3120, hw_y + 55), "Syslog EVE -> alderlake:5140  |  ai_blocklist alias  |  Firewall API", fill=C_RED, font=font_small)
 
 # ============================================================
-# Client boxes
+# AI SURICATA STACK (right side)
 # ============================================================
-box(80, 170, 220, 80, "Claude Code", "MCP client (stdio)", (50, 55, 70), border=C_WHITE)
-box(320, 170, 220, 80, "HTTP Clients", "curl, apps, scripts", (50, 55, 70), border=C_GRAY_LT)
+sx = 2440
+sy = 240
+section_bg(sx, sy, 1320, 860, "AI SURICATA THREAT ANALYSIS", C_RED)
 
-box(80, 290, 220, 80, "MCP Server", "stdio protocol", C_BLUE)
-box(320, 290, 220, 80, "HTTP API", "FastAPI + Uvicorn", C_BLUE)
-port_badge(340, 375, "8090", C_CYAN)
+# OPNsense -> eve_receiver
+box(sx + 40, sy + 40, 280, 70, "OPNsense Syslog", "EVE JSON + fast-log", (100, 30, 40), border=C_RED)
+port_badge(sx + 330, sy + 50, "5140/TCP", C_RED)
+arrow(sx + 320, sy + 75, sx + 430, sy + 75, C_RED, 3)
 
-# Client arrows
-arrow(190, 250, 190, 290, C_WHITE, 2)
-arrow(430, 250, 430, 290, C_GRAY_LT, 2)
+# eve_receiver
+box(sx + 430, sy + 40, 280, 70, "eve_receiver.py", "Parse EVE, push to Redis", C_CRIMSON)
 
-# Both servers use same backend
-arrow(300, 330, 320, 330, C_BLUE, 2)
+# ai_suricata daemon
+box(sx + 40, sy + 150, 300, 80, "ai_suricata.py", "Poll Redis, analyze, auto-block", C_CRIMSON)
+draw.text((sx + 60, sy + 240), "4-tier auto-block  |  conf >= 0.70", fill=C_DIM, font=font_small)
 
-# ============================================================
-# MCP Tool boxes (organized by category)
-# ============================================================
-# Memory tools
-draw.text((60, 520), "Memory", fill=C_BLUE_LT, font=font_label)
-small_box(60, 545, 170, 55, "memory_store", "ctx, files, task", C_BLUE)
-small_box(240, 545, 170, 55, "memory_recall", "session retrieval", C_BLUE)
-small_box(420, 545, 180, 55, "list_sessions", "recent sessions", C_BLUE)
+# HiveCoder analysis
+box(sx + 380, sy + 150, 280, 80, "HiveCoder Analysis", "Qwen3-14B threat reasoning", C_TEAL, border=C_TEAL)
+arrow(sx + 340, sy + 190, sx + 380, sy + 190, C_TEAL, 2)
+draw.text((sx + 400, sy + 240), "severity, confidence, IOC, FP score", fill=C_DIM, font=font_small)
 
-# Fact tools
-draw.text((60, 620), "Facts / RAG", fill=C_GREEN, font=font_label)
-small_box(60, 645, 170, 55, "fact_store", "key + embedding", (40, 100, 55))
-small_box(240, 645, 170, 55, "fact_get", "retrieve facts", (40, 100, 55))
-small_box(420, 645, 180, 55, "fact_suggestions", "missed query analysis", (40, 100, 55))
+# Dashboard
+box(sx + 700, sy + 40, 260, 70, "Dashboard", "Metrics, charts, blocks", C_BLUE)
+port_badge(sx + 970, sy + 50, "8080", C_CYAN)
 
-# LLM tools
-draw.text((60, 720), "LLM Inference", fill=C_TEAL, font=font_label)
-small_box(60, 745, 170, 55, "llm_generate", "prompt + RAG", (30, 120, 110))
-small_box(240, 745, 170, 55, "llm_code_assist", "review/fix/opt", (30, 120, 110))
-small_box(420, 745, 180, 55, "llm_complete", "FIM completion", (30, 120, 110))
+# Auto-block -> OPNsense
+box(sx + 40, sy + 290, 300, 70, "Auto-Block Engine", "OPNsense API -> ai_blocklist", C_RED, border=C_ORANGE)
+arrow(sx + 190, sy + 230, sx + 190, sy + 290, C_RED, 2)
 
-# Cache & Learning
-draw.text((60, 820), "Cache & Learning", fill=C_ORANGE, font=font_label)
-small_box(60, 845, 170, 55, "tool_cache", "get/set outputs", C_GRAY)
-small_box(240, 845, 170, 55, "learning_add", "training samples", (160, 100, 20))
-small_box(420, 845, 180, 55, "get_stats", "system health", C_GRAY)
+# Correlation engine
+box(sx + 380, sy + 290, 280, 70, "Correlation Engine", "IP patterns, kill chain stage", (130, 50, 50))
+arrow(sx + 340, sy + 325, sx + 380, sy + 325, C_RED, 2, dashed=True)
 
-# Connectors: MCP server -> tools region
-arrow(190, 370, 190, 500, C_BLUE, 2, dashed=True)
-arrow(430, 370, 400, 500, C_BLUE, 2, dashed=True)
+# OPNsense firewall response
+box(sx + 700, sy + 150, 260, 70, "OPNsense API", "Alias + rule management", (100, 30, 40), border=C_RED)
+arrow(sx + 340, sy + 325, sx + 700, sy + 185, C_RED, 2, dashed=True)
 
-# ============================================================
-# Redis boxes
-# ============================================================
-# Data structures
-box(900, 170, 280, 70, "session:{id}", "hash - ctx, files, task, node", (130, 40, 50))
-box(1220, 170, 280, 70, "sessions:recent", "sorted set - by timestamp", (130, 40, 50))
+# Blocked stats box
+box(sx + 700, sy + 290, 260, 70, "Firewall Rules", "Banned ports, ICMP, RFC1918", (80, 30, 40))
 
-box(900, 270, 280, 70, "facts:system", "hash - key -> value", (130, 40, 50))
-box(1220, 270, 280, 70, "fact_embeddings:*", "base64 float32[384]", (100, 40, 80))
+# MCP Server for AI Suricata
+box(sx + 40, sy + 400, 300, 70, "MCP Server", "13 tools: query, block, correlate", C_BLUE)
+port_badge(sx + 350, sy + 410, "MCP", C_BLUE)
 
-box(900, 370, 280, 70, "learning:queue", "stream - interactions", (150, 90, 30))
-box(1220, 370, 280, 70, "llm:cache:{hash}", "inference cache (30m)", (130, 40, 50))
+# Daily summary
+box(sx + 380, sy + 400, 280, 70, "Daily Summary", "Threat level, noise ratio, trends", (130, 80, 30))
 
-box(900, 470, 280, 70, "tool:{name}:{hash}", "output cache (1h)", (130, 40, 50))
-box(1220, 470, 280, 70, "rag:retrieval_log", "stream - quality tracking", (100, 40, 80))
+# DNSBL
+box(sx + 700, sy + 400, 260, 70, "Unbound DNSBL", "7 blocklists (hagezi, ThreatFox)", C_PURPLE)
 
-# Cluster info
-box(940, 590, 560, 70, "3 Masters + 3 Replicas", "ports 7000-7005, 16384 hash slots, password auth", (60, 25, 35), border=C_RED)
-port_badge(960, 665, "7000-7005", C_RED)
+# NAS storage
+box(sx + 40, sy + 510, 300, 70, "NAS Storage", "/var/mnt/ai/suricata/", C_GRAY, border=C_GRAY_LT)
+draw.text((sx + 60, sy + 590), "EVE logs  |  AI results  |  analysis JSONL", fill=C_DIM, font=font_small)
 
-# TTL legend
-draw.text((900, 710), "TTLs:", fill=C_DIM, font=font_label)
-draw.text((950, 710), "sessions 7d  |  embeddings 30d  |  llm cache 30m  |  tool cache 1h", fill=(100, 105, 120), font=font_small)
+# Learning feedback
+box(sx + 380, sy + 510, 280, 70, "Learning Queue", "Training samples -> Redis", C_ORANGE)
+arrow(sx + 380, sy + 545, sx + 340, sy + 545, C_ORANGE, 2, dashed=True)
+draw.text((sx + 400, sy + 590), "Feeds back into HiveCoder training", fill=C_ORANGE, font=font_small)
 
-# Throughput
-draw.text((900, 740), "Perf:", fill=C_DIM, font=font_label)
-draw.text((950, 740), "GET 14.7K/s  |  SET 10.6K/s  |  Pipeline 59.7K/s  |  <1ms latency", fill=(100, 105, 120), font=font_small)
+# DNS redirect
+box(sx + 700, sy + 510, 260, 70, "DNS Redirect", "Force all DNS through Unbound", (80, 50, 120))
+
+# Suricata detection stats
+draw.text((sx + 60, sy + 640), "Suricata: IPS Netmap mode  |  Detect: HIGH  |  HTTP extended logging", fill=C_DIM, font=font_small)
+draw.text((sx + 60, sy + 665), "Auto-block tiers: critical/high + medium-block + critical-investigate + malicious-category", fill=C_RED, font=font_small)
+
+# Internal flow arrows
+arrow(sx + 570, sy + 75, sx + 570, sy + 150, C_CRIMSON, 2)  # eve -> analysis
+arrow(sx + 710, sy + 75, sx + 830, sy + 40, C_BLUE, 2, dashed=True)  # eve -> dashboard
 
 # ============================================================
-# LLM Inference boxes
+# HIVE-MIND STACK (left-center)
 # ============================================================
-# HiveCoder (system service)
-box(1640, 170, 320, 90, "HiveCoder-7B", "Q5_K_M  |  5.1 GB VRAM", C_TEAL)
-port_badge(1660, 265, "8089", C_TEAL)
-draw.text((1730, 270), "system service  |  127.0.0.1", fill=C_DIM, font=font_small)
+hx = 40
+hy = 240
+section_bg(hx, hy, 1160, 560, "HIVE-MIND AI MEMORY + RAG", C_BLUE)
 
-# Qwen3-14B (user service)
-box(1640, 310, 320, 90, "Qwen3-14B", "Q4_K_M  |  8.4 GB VRAM", C_CYAN)
-port_badge(1660, 405, "8080", C_CYAN)
-draw.text((1730, 410), "user service  |  0.0.0.0", fill=C_DIM, font=font_small)
+# Clients
+box(hx + 40, hy + 40, 200, 65, "Claude Code", "MCP client (stdio)", (50, 55, 70), border=C_WHITE)
+box(hx + 260, hy + 40, 200, 65, "HTTP Clients", "curl, apps, scripts", (50, 55, 70), border=C_GRAY_LT)
+box(hx + 480, hy + 40, 200, 65, "Chrome Ext", "Firefox bridge", (50, 55, 70), border=C_GRAY_LT)
 
-# GPU
-box(2000, 170, 320, 90, "AMD R9700", "32 GB VRAM  |  ROCm 7.12", (50, 55, 70), border=C_TEAL)
-draw.text((2020, 270), "~7.7 GB used (HiveCoder)", fill=C_DIM, font=font_small)
-draw.text((2020, 290), "~13 GB used (Qwen3-14B)", fill=C_DIM, font=font_small)
-draw.text((2020, 310), "~11 GB free headroom", fill=C_GREEN, font=font_small)
+# MCP/HTTP servers
+box(hx + 40, hy + 130, 200, 65, "MCP Server", "stdio protocol", C_BLUE)
+box(hx + 260, hy + 130, 200, 65, "HTTP API", "FastAPI + Uvicorn", C_BLUE)
+port_badge(hx + 470, hy + 140, "8090", C_CYAN)
 
-# OpenAI-compatible API
-box(1640, 460, 680, 70, "OpenAI-Compatible API (/v1/chat/completions)", "RAG fact injection into system prompt before inference", (30, 120, 110))
-port_badge(2180, 540, "8090", C_CYAN)
-draw.text((2250, 545), "proxied via HTTP API", fill=C_DIM, font=font_small)
+arrow(hx + 140, hy + 105, hx + 140, hy + 130, C_WHITE, 2)
+arrow(hx + 360, hy + 105, hx + 360, hy + 130, C_GRAY_LT, 2)
+arrow(hx + 580, hy + 105, hx + 460, hy + 130, C_GRAY_LT, 2)
 
-# GPU arrows
-arrow(1960, 215, 2000, 215, C_TEAL, 2)
-arrow(1960, 355, 2000, 280, C_CYAN, 2)
+# MCP Tools
+draw.text((hx + 60, hy + 210), "MCP Tools (13 endpoints)", fill=C_BLUE_LT, font=font_label)
 
-# LLM -> API
-arrow(1800, 260, 1800, 310, C_GRAY_LT, 1, dashed=True)
-draw.text((1810, 275), "separate servers", fill=(80, 85, 100), font=font_small)
+small_box(hx + 40, hy + 235, 150, 45, "memory_store", "ctx, files", C_BLUE)
+small_box(hx + 200, hy + 235, 150, 45, "memory_recall", "sessions", C_BLUE)
+small_box(hx + 360, hy + 235, 150, 45, "fact_store", "key + embed", (40, 100, 55))
+small_box(hx + 520, hy + 235, 150, 45, "fact_get", "retrieve", (40, 100, 55))
 
-# ============================================================
-# Training boxes
-# ============================================================
-box(1640, 740, 200, 80, "Drain Queue", "every 5 min", C_ORANGE)
-box(1860, 740, 200, 80, "Quality Filter", "min len, success", (160, 100, 20))
-box(1640, 850, 200, 80, "LoRA Training", "r=16, alpha=32", (160, 100, 20))
-box(1860, 850, 200, 80, "GGUF Export", "Q5_K_M quantize", (160, 100, 20))
-box(2100, 850, 240, 80, "Hot Swap", "symlink + restart", (160, 100, 20), border=C_TEAL)
+small_box(hx + 40, hy + 290, 150, 45, "llm_generate", "prompt+RAG", (30, 120, 110))
+small_box(hx + 200, hy + 290, 150, 45, "llm_code_assist", "review/fix", (30, 120, 110))
+small_box(hx + 360, hy + 290, 150, 45, "llm_complete", "FIM", (30, 120, 110))
+small_box(hx + 520, hy + 290, 150, 45, "learning_add", "samples", (160, 100, 20))
 
-# Training flow arrows
-arrow(1840, 780, 1860, 780, C_ORANGE, 2)
-arrow(1960, 820, 1740, 850, C_ORANGE, 2)
-arrow(1840, 890, 1860, 890, C_ORANGE, 2)
-arrow(2060, 890, 2100, 890, C_ORANGE, 2)
-arrow(2220, 850, 2220, 540, C_TEAL, 2, dashed=True)  # hot swap -> llama-server
-draw.text((2230, 700), "reload", fill=C_TEAL, font=font_small)
+small_box(hx + 40, hy + 345, 150, 45, "tool_cache", "get/set", C_GRAY)
+small_box(hx + 200, hy + 345, 150, 45, "web_fetch", "URL content", C_GRAY)
+small_box(hx + 360, hy + 345, 150, 45, "web_search", "DDG search", C_GRAY)
+small_box(hx + 520, hy + 345, 150, 45, "get_stats", "health", C_GRAY)
 
-# Training threshold note
-draw.text((1660, 940), "Triggers: 100+ samples  |  1 epoch  |  ~4 min cycle", fill=C_DIM, font=font_small)
+# RAG Pipeline
+draw.text((hx + 720, hy + 210), "RAG Pipeline", fill=C_GREEN, font=font_label)
+box(hx + 700, hy + 235, 200, 55, "Semantic Search", "cosine >= 0.45", C_GREEN)
+box(hx + 920, hy + 235, 200, 55, "Keyword Fallback", "70+ keyword map", (40, 130, 70))
+box(hx + 700, hy + 305, 200, 55, "Fact Injection", "into LLM prompt", (40, 130, 70))
+box(hx + 920, hy + 305, 200, 55, "Quality Tracker", "hit rate, logs", (40, 130, 70))
+draw.text((hx + 720, hy + 375), "84% hit rate  |  semantic-only retrieval", fill=C_GREEN, font=font_small)
 
-# ============================================================
-# Embedding boxes
-# ============================================================
-box(80, 1140, 300, 80, "bge-small-en-v1.5", "384-dim, SentenceTransformer", C_PURPLE)
-draw.text((100, 1230), "Runs on CPU (keeps GPU free for LLM)", fill=C_DIM, font=font_small)
-
-box(430, 1140, 160, 80, "Encode", "query/fact text", (100, 55, 160))
-box(620, 1140, 150, 80, "Cosine Sim", "dot product", (100, 55, 160))
-
-# Embedding arrows
-arrow(380, 1180, 430, 1180, C_PURPLE, 2)
-arrow(590, 1180, 620, 1180, C_PURPLE, 2)
+# Embedding
+box(hx + 700, hy + 410, 420, 55, "Embedding Engine (bge-small-en-v1.5)", "384-dim, CPU, SentenceTransformer", C_PURPLE)
+port_badge(hx + 700, hy + 475, "8081 (alderlake)", C_PURPLE)
 
 # ============================================================
-# RAG Pipeline boxes
+# REDIS CLUSTER (center)
 # ============================================================
-box(900, 1140, 280, 70, "Semantic Search", "cosine sim >= 0.45", C_GREEN)
-box(900, 1240, 280, 70, "Keyword Fallback", "70+ keyword map", (40, 130, 70))
-box(1220, 1140, 280, 70, "Top-K Selection", "rank + threshold", (40, 130, 70))
-box(1220, 1240, 280, 70, "Retrieval Tracker", "hit rate, quality log", (40, 130, 70))
+rx = 1240
+ry = 240
+section_bg(rx, ry, 560, 560, "REDIS CLUSTER", C_RED)
 
-# RAG quality labels
-draw.text((920, 1330), "Quality:  >= 0.6 good  |  0.45-0.6 weak  |  < 0.45 miss", fill=C_DIM, font=font_small)
-draw.text((920, 1355), "Current:  84% hit rate  |  31 facts  |  semantic-only retrieval", fill=C_GREEN, font=font_small)
+box(rx + 30, ry + 40, 240, 55, "session:{id}", "hash - ctx, files, task", (130, 40, 50))
+box(rx + 290, ry + 40, 240, 55, "facts:system", "hash - key -> value", (130, 40, 50))
 
-# RAG flow
-arrow(770, 1180, 900, 1180, C_GREEN, 2)  # cosine -> semantic
-arrow(1180, 1180, 1220, 1180, C_GREEN, 2)  # semantic -> top-k
-arrow(1040, 1210, 1040, 1240, (40, 130, 70), 2, dashed=True)  # fallback
-draw.text((1050, 1218), "fallback", fill=C_DIM, font=font_small)
+box(rx + 30, ry + 110, 240, 55, "learning:queue", "stream - interactions", (150, 90, 30))
+box(rx + 290, ry + 110, 240, 55, "fact_embeddings:*", "base64 float32[384]", (100, 40, 80))
 
-# ============================================================
-# Multi-node boxes
-# ============================================================
-box(1640, 1140, 320, 80, "aurora (BEAST)", "GPU inference + training", (50, 55, 70), border=C_TEAL)
-box(1640, 1260, 320, 80, "r720xd (NAS)", "embeddings + storage", (50, 55, 70), border=C_GRAY_LT)
+box(rx + 30, ry + 180, 240, 55, "suricata:alerts", "EVE alerts queue", (130, 40, 50))
+box(rx + 290, ry + 180, 240, 55, "suricata:ai_results", "enriched analysis", (130, 40, 50))
 
-draw.text((2000, 1150), "AMD R9700 32GB", fill=C_DIM, font=font_small)
-draw.text((2000, 1170), "Redis cluster (6 nodes)", fill=C_DIM, font=font_small)
-draw.text((2000, 1190), "llama-server x2", fill=C_DIM, font=font_small)
+box(rx + 30, ry + 250, 240, 55, "suricata:ai_blocks", "auto-block audit log", (130, 40, 50))
+box(rx + 290, ry + 250, 240, 55, "suricata:ai_correlations", "attack patterns", (130, 40, 50))
 
-draw.text((2000, 1270), "Dual Xeon E5-2660", fill=C_DIM, font=font_small)
-draw.text((2000, 1290), "24x 2.5\" bays, 64GB RAM", fill=C_DIM, font=font_small)
-draw.text((2000, 1310), "Embedding offload (future)", fill=C_DIM, font=font_small)
+box(rx + 30, ry + 320, 500, 55, "llm:cache + tool:cache + rag:retrieval_log", "inference 30m, tool 1h, quality tracking", (60, 25, 35))
 
-arrow(1800, 1220, 1800, 1260, C_GRAY_LT, 2, dashed=True)
-draw.text((1810, 1230), "Tailscale VPN", fill=C_DIM, font=font_small)
+# Cluster topology
+box(rx + 30, ry + 410, 500, 55, "Aurora: 3 Masters (7000-7002)  |  Alderlake: 3 Replicas (7003-7005)", "", (60, 25, 35), border=C_RED)
+draw.text((rx + 50, ry + 480), "16384 hash slots  |  password auth  |  GET 14.7K/s  |  <1ms LAN", fill=C_DIM, font=font_small)
 
 # ============================================================
-# Cross-section arrows (data flow)
+# LLM INFERENCE (center-right)
 # ============================================================
+lx = 1840
+ly = 240
+section_bg(lx, ly, 560, 280, "LLM INFERENCE (GPU)", C_TEAL)
 
-# MCP tools -> Redis (store/retrieve)
-arrow_label(620, 572, 900, 205, "store/recall", C_BLUE_LT, 2, offset=(-20, -18))
-arrow_label(620, 672, 900, 305, "facts r/w", C_GREEN, 2, offset=(-20, -18))
-arrow_label(420, 872, 900, 405, "xadd samples", C_ORANGE, 2, offset=(-30, -18))
-arrow_label(600, 872, 900, 505, "cache r/w", C_GRAY_LT, 2, offset=(-20, -18))
+box(lx + 30, ly + 40, 240, 70, "Qwen3-14B", "Q4_K_M  |  ~8GB VRAM", C_TEAL)
+port_badge(lx + 280, ly + 50, "8089", C_TEAL)
+draw.text((lx + 360, ly + 55), "llama-server", fill=C_DIM, font=font_small)
 
-# MCP tools -> LLM (inference)
-arrow_label(620, 772, 1640, 490, "prompt + facts", C_TEAL, 3, offset=(-60, -20))
+box(lx + 30, ly + 130, 240, 70, "Hive-Mind HTTP", "OpenAI-compat proxy", C_BLUE)
+port_badge(lx + 280, ly + 140, "8090", C_CYAN)
+draw.text((lx + 360, ly + 145), "RAG injection", fill=C_DIM, font=font_small)
 
-# Redis -> Training (drain)
-arrow_label(1040, 440, 1640, 780, "drain queue", C_ORANGE, 2, dashed=True, offset=(-50, -18))
+arrow(lx + 150, ly + 110, lx + 150, ly + 130, C_TEAL, 2)
 
-# Redis -> Embedding (load cached embeddings)
-arrow_label(900, 340, 700, 1140, "cached embeddings", C_PURPLE, 2, dashed=True, offset=(-70, 0))
-
-# RAG -> LLM (inject facts into prompt)
-arrow_label(1360, 1140, 1980, 530, "inject into prompt", C_GREEN, 3, offset=(-60, -18))
-
-# Embedding -> Redis (store embeddings)
-arrow_label(590, 1140, 900, 340, "store embeddings", C_PURPLE, 2, offset=(-60, 5))
+# GPU box
+box(lx + 30, ly + 220, 500, 40, "AMD R9700  |  32GB VRAM  |  ROCm 7.12  |  ~8GB used, ~24GB free", "", (40, 50, 60), border=C_TEAL)
 
 # ============================================================
-# Legend
+# CONTINUOUS LEARNING (center-right below)
 # ============================================================
-lx, ly = 2420, 1080
-section_bg(lx - 20, ly - 10, 380, 340, "LEGEND", C_WHITE)
+tx = 1840
+ty = 560
+section_bg(tx, ty, 560, 240, "CONTINUOUS LEARNING", C_ORANGE)
 
-ly += 20
+small_box(tx + 30, ty + 35, 160, 50, "Drain Queue", "every 5 min", C_ORANGE)
+small_box(tx + 200, ty + 35, 160, 50, "Quality Filter", "min len, success", (160, 100, 20))
+small_box(tx + 370, ty + 35, 160, 50, "Collect Data", "from Redis", (160, 100, 20))
+
+small_box(tx + 30, ty + 100, 160, 50, "LoRA Training", "r=8, alpha=16", (160, 100, 20))
+small_box(tx + 200, ty + 100, 160, 50, "GGUF Export", "Q5_K_M quant", (160, 100, 20))
+small_box(tx + 370, ty + 100, 160, 50, "Hot Swap", "symlink + restart", (160, 100, 20), border=C_TEAL)
+
+arrow(tx + 190, ty + 60, tx + 200, ty + 60, C_ORANGE, 2)
+arrow(tx + 360, ty + 60, tx + 370, ty + 60, C_ORANGE, 2)
+arrow(tx + 450, ty + 85, tx + 110, ty + 100, C_ORANGE, 2)
+arrow(tx + 190, ty + 125, tx + 200, ty + 125, C_ORANGE, 2)
+arrow(tx + 360, ty + 125, tx + 370, ty + 125, C_ORANGE, 2)
+
+draw.text((tx + 50, ty + 170), "Timer: 2 AM daily  |  Daemon: 50-sample threshold  |  QLoRA 4-bit supported", fill=C_DIM, font=font_small)
+draw.text((tx + 50, ty + 192), "Stops llama-server during training  |  Backup to NAS with 30-day cleanup", fill=C_DIM, font=font_small)
+
+# ============================================================
+# DATA FLOW ARROWS (cross-section)
+# ============================================================
+
+# Hive-Mind tools -> Redis
+arrow_label(hx + 670, hy + 260, rx + 30, ry + 65, "store/recall", C_BLUE_LT, 2, offset=(-30, -16))
+arrow_label(hx + 670, hy + 315, rx + 30, ry + 135, "samples", C_ORANGE, 2, offset=(-20, -16))
+
+# Redis -> LLM (inference via HTTP)
+arrow_label(rx + 530, ry + 65, lx + 30, ly + 160, "RAG facts", C_GREEN, 2, offset=(-30, -16))
+
+# Redis -> AI Suricata (alerts)
+arrow_label(rx + 530, ry + 205, sx + 40, sy + 190, "alerts queue", C_RED, 2, offset=(-30, -16))
+
+# AI Suricata -> Redis (results)
+arrow_label(sx + 40, sy + 350, rx + 530, ry + 275, "results + blocks", C_CRIMSON, 2, dashed=True, offset=(-40, 5))
+
+# AI Suricata -> LLM (analysis)
+arrow_label(sx + 380, sy + 160, lx + 530, ly + 75, "threat analysis", C_TEAL, 2, offset=(-50, -16))
+
+# Training -> LLM (hot swap)
+arrow(tx + 530, ty + 125, lx + 530, ly + 75, C_TEAL, 2, dashed=True)
+draw.text((lx + 540, ly + 100), "hot swap", fill=C_TEAL, font=font_small)
+
+# Learning -> Redis (drain)
+arrow_label(tx + 30, ty + 60, rx + 530, ry + 135, "drain", C_ORANGE, 2, dashed=True, offset=(-20, -16))
+
+# ============================================================
+# NETWORK FLOW (bottom)
+# ============================================================
+ny_ = 1140
+section_bg(40, ny_, 3720, 280, "NETWORK SECURITY FLOW", C_YELLOW)
+
+# Internet
+box(80, ny_ + 40, 200, 70, "Internet", "WAN traffic", (60, 60, 80), border=C_YELLOW)
+
+# OPNsense Suricata
+box(340, ny_ + 40, 280, 70, "Suricata IPS", "Netmap, detect HIGH", C_RED)
+arrow(280, ny_ + 75, 340, ny_ + 75, C_YELLOW, 3)
+
+# Firewall
+box(680, ny_ + 40, 280, 70, "OPNsense Firewall", "ai_blocklist + banned ports", (100, 30, 40))
+arrow(620, ny_ + 75, 680, ny_ + 75, C_RED, 3)
+
+# Syslog
+box(340, ny_ + 140, 280, 70, "Syslog (EVE JSON)", "TCP -> alderlake:5140", (80, 40, 50))
+arrow(480, ny_ + 110, 480, ny_ + 140, C_RED, 2)
+
+# LAN
+box(1020, ny_ + 40, 200, 70, "LAN / WiFi", "Home network", (40, 80, 50), border=C_GREEN)
+arrow(960, ny_ + 75, 1020, ny_ + 75, C_GREEN, 3)
+
+# DNS flow
+box(1020, ny_ + 140, 200, 70, "Unbound DNS", "DNSBL + redirect", C_PURPLE)
+arrow(1120, ny_ + 110, 1120, ny_ + 140, C_PURPLE, 2)
+
+# eve_receiver on alderlake
+box(680, ny_ + 140, 280, 70, "eve_receiver", "alderlake container", C_CRIMSON)
+arrow(620, ny_ + 175, 680, ny_ + 175, C_RED, 2)
+
+# Redis
+box(1020, ny_ + 140, 200, 70, "Unbound DNS", "DNSBL + redirect", C_PURPLE)
+
+# AI analysis flow
+box(1280, ny_ + 40, 260, 70, "AI Suricata", "Analyze + correlate", C_CRIMSON)
+arrow(960, ny_ + 175, 1280, ny_ + 75, C_CRIMSON, 2)
+
+# Auto-block feedback
+box(1280, ny_ + 140, 260, 70, "Auto-Block", "API -> ai_blocklist", C_RED, border=C_ORANGE)
+arrow(1410, ny_ + 110, 1410, ny_ + 140, C_RED, 2)
+arrow(1280, ny_ + 175, 820, ny_ + 110, C_ORANGE, 2, dashed=True)
+draw.text((1000, ny_ + 135), "feedback loop", fill=C_ORANGE, font=font_small)
+
+# HiveCoder
+box(1600, ny_ + 40, 240, 70, "HiveCoder LLM", "Threat reasoning", C_TEAL)
+arrow(1540, ny_ + 75, 1600, ny_ + 75, C_TEAL, 2)
+
+# Learning
+box(1600, ny_ + 140, 240, 70, "Learning Queue", "Training feedback", C_ORANGE)
+arrow(1720, ny_ + 110, 1720, ny_ + 140, C_ORANGE, 2, dashed=True)
+
+# Dashboard
+box(1900, ny_ + 40, 220, 70, "Dashboard", "Real-time metrics", C_BLUE)
+port_badge(1900, ny_ + 115, "8080", C_CYAN)
+
+# Blocked stats
+draw.text((2180, ny_ + 50), "Active Defenses:", fill=C_WHITE, font=font_label)
+draw.text((2180, ny_ + 75), "25+ CIDR blocks  |  24 banned ports", fill=C_RED, font=font_small)
+draw.text((2180, ny_ + 95), "ICMP blocked  |  RFC1918 anti-spoof", fill=C_RED, font=font_small)
+draw.text((2180, ny_ + 115), "7 DNS blocklists  |  DNS redirect", fill=C_PURPLE, font=font_small)
+draw.text((2180, ny_ + 135), "4-tier auto-block  |  conf >= 0.70", fill=C_ORANGE, font=font_small)
+draw.text((2180, ny_ + 155), "IPS Netmap  |  Detect HIGH", fill=C_RED, font=font_small)
+draw.text((2180, ny_ + 175), "Continuous learning from alerts", fill=C_ORANGE, font=font_small)
+
+# ============================================================
+# LEGEND
+# ============================================================
+lgx, lgy = 2700, ny_ + 30
+section_bg(lgx, lgy, 380, 240, "LEGEND", C_WHITE)
+
+lgy += 25
 for label, color, dash in [
-    ("Memory / Sessions", C_BLUE_LT, False),
-    ("Fact Storage / RAG", C_GREEN, False),
+    ("Hive-Mind / Memory", C_BLUE_LT, False),
+    ("Threat Analysis", C_RED, False),
     ("LLM Inference", C_TEAL, False),
-    ("Embeddings", C_PURPLE, False),
-    ("Training Pipeline", C_ORANGE, True),
-    ("Cache / Internal", C_GRAY_LT, True),
+    ("RAG / Embeddings", C_GREEN, False),
+    ("Training / Learning", C_ORANGE, True),
+    ("DNS / Blocklists", C_PURPLE, False),
+    ("Firewall Feedback", C_ORANGE, False),
 ]:
-    arrow(lx, ly + 10, lx + 50, ly + 10, color, 3, dash)
-    draw.text((lx + 60, ly), label, fill=C_DIM, font=font_small)
-    ly += 28
+    arrow(lgx + 20, lgy + 10, lgx + 60, lgy + 10, color, 3, dash)
+    draw.text((lgx + 70, lgy), label, fill=C_DIM, font=font_small)
+    lgy += 24
 
-ly += 15
-draw.text((lx, ly), "Services", fill=C_WHITE, font=font_label)
-ly += 22
-for svc, port, status in [
-    ("hivecoder-llm", "8089", "system"),
-    ("llama-server", "8080", "user"),
-    ("hive-mind-http", "8090", "system"),
-    ("hivecoder-learning", "-", "system"),
+lgy += 8
+draw.text((lgx + 20, lgy), "Key Ports:", fill=C_WHITE, font=font_label)
+lgy += 20
+for svc, port in [
+    ("llama-server (Qwen3-14B)", "8089"),
+    ("hive-mind-http (proxy)", "8090"),
+    ("eve_receiver (syslog)", "5140"),
+    ("dashboard (metrics)", "8080"),
+    ("Redis cluster", "7000-7005"),
 ]:
-    draw.text((lx, ly), f"{svc}", fill=C_DIM, font=font_small)
-    draw.text((lx + 210, ly), f":{port}", fill=C_CYAN, font=font_small)
-    draw.text((lx + 270, ly), status, fill=(100, 105, 120), font=font_small)
-    ly += 22
+    draw.text((lgx + 20, lgy), svc, fill=C_DIM, font=font_small)
+    draw.text((lgx + 290, lgy), f":{port}", fill=C_CYAN, font=font_small)
+    lgy += 20
 
-ly += 10
-draw.text((lx, ly), "Updated: 2026-02-15", fill=(70, 75, 90), font=font_small)
+# ============================================================
+# Timestamp
+# ============================================================
+draw.text((W - 260, H - 30), "Updated: 2026-03-01", fill=(70, 75, 90), font=font_small)
 
 # ============================================================
 # Save
